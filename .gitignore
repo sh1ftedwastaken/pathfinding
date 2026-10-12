@@ -1,0 +1,12 @@
+# Python caches
+__pycache__/
+*.pyc
+
+# C++ Build artifacts
+build/
+bin/
+obj/
+*.pyd
+*.so
+*.dylib
+*.exe

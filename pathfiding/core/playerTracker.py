@@ -8,22 +8,27 @@ import constants as C
 
 class PlayerTracker:
     def __init__(self):
+        # Stats
         self.health = 20
         
+        # Position and elevation
         self.x, self.y, self.z = map(math.floor, m.player().position)
         self.yaw, self.pitch = C.YAW_FACING_EAST, C.PITCH_LOOK_AHEAD
         self.x_vel, self.y_vel, self.z_vel = 0, 0, 0
         self._last_pos = (self.x, self.y, self.z)
         
-        self.targeted_block = ""
-        self.targeted_entity = None
-        self.main_hand_item:str = ''
-        self.off_hand_item:str = ''
+        # Player Target
+        self.targeted_block   = ""
+        self.targeted_entity  = None
+        self.main_hand_item   = ""
+        self.off_hand_item    = ""
         
+        # Safety
         self.lava_around = set()
         self._restart = False
         self.stop_tracking = False
         
+        # Restart parameters
         self._last_time_movement = time.time()
         self.auto_tracking = False
         
@@ -44,63 +49,73 @@ class PlayerTracker:
     
     def player_info(self):
         while (not self.stop_tracking):
+            with m.tick_loop:
+                self.health = m.player().health
+                
+                self.x, self.y, self.z = map(math.floor, m.player().position)
+                
+                # clip yaw (-180 to 180) and pitch (-90 to 90)
+                yaw = ((m.player().yaw + 180) % 360) - 180
+                pitch = ((m.player().pitch + 90) % 180) - 90
 
-            self.health = m.player().health
-            
-            self.x, self.y, self.z = map(math.floor, m.player().position)
-            
-            yaw = ((m.player().yaw + 180) % 360) - 180
-            pitch = ((m.player().pitch + 90) % 180) - 90
+                if -135 <= yaw < -45: self.yaw = C.YAW_FACING_EAST
+                elif -45 < yaw <= 45: self.yaw = C.YAW_FACING_SOUTH
+                elif 45 < yaw < 135: self.yaw = C.YAW_FACING_WEST
+                else: self.yaw = C.YAW_FACING_NORTH
+                self.pitch = pitch
 
-            if -135 <= yaw < -45: self.yaw = C.YAW_FACING_EAST
-            elif -45 < yaw <= 45: self.yaw = C.YAW_FACING_SOUTH
-            elif 45 < yaw < 135: self.yaw = C.YAW_FACING_WEST
-            else: self.yaw = C.YAW_FACING_NORTH
-            self.pitch = pitch
-
-            self.x_vel, self.y_vel, self.z_vel = map(
-                lambda v: round(v, 5), (v for v in m.player().velocity)
+                self.x_vel, self.y_vel, self.z_vel = (
+                    v for v in m.player().velocity
                 )
-            
-            current_pos = (self.x, self.y, self.z)
-            if current_pos != self._last_pos:
-                self._last_time_movement = time.time()
-                self._last_pos = current_pos
-            
-            time.sleep(C.ONE_TICK_TIME / 10)
-            
+                
+                current_pos = (self.x, self.y, self.z)
+                if current_pos != self._last_pos:
+                    self._last_time_movement = time.time()
+                    self._last_pos = current_pos
+                        
             
     def tool_in_main_hand(self):
         while (not self.stop_tracking):
-            time.sleep(C.ONE_TICK_TIME / 10)
-            
-            if (not self.auto_tracking):
-                continue
-            
-            self.targeted_block = m.player_get_targeted_block(5)
-            
-            main_hand_item = m.player_hand_items().main_hand
-            off_hand_item = m.player_hand_items().off_hand
-            
-            self.main_hand_item = main_hand_item.item if main_hand_item else ''
-            self.off_hand_item = off_hand_item.item if off_hand_item else ''
-                
-            
-            if self.main_hand_item:
-                if self.main_hand_item in C.HAND_ITEMS:
+            with m.tick_loop:
+                if (not self.auto_tracking):
                     continue
-
-                if m.player_get_targeted_block(5):
-                    try:
-                        if m.player_get_targeted_block()[3] in C.SHOVEL_BREAKABLE: 
-                            m.player_inventory_select_slot(C.SHOVEL_SLOT)
-                        else: 
-                            m.player_inventory_select_slot(C.PICKAXE_SLOT)
-                    except Exception as e:
-                        m.echo(f"{m_extra.txt_clr('r')}Error: {e}")
+                
+                self.targeted_block = m.player_get_targeted_block(5)
+                
+                main_hand_item = m.player_hand_items().main_hand
+                off_hand_item = m.player_hand_items().off_hand
+                
+                self.main_hand_item = main_hand_item.item if main_hand_item else ''
+                self.off_hand_item = off_hand_item.item if off_hand_item else ''
+                    
+                
+                if self.main_hand_item:
+                    if self.main_hand_item in C.HAND_ITEMS:
                         continue
                     
+                    block =  m.player_get_targeted_block(5)
+                    if block:
+                        try:
+                            if block.type in C.SHOVEL_BREAKABLE: 
+                                m.player_inventory_select_slot(C.SHOVEL_SLOT)
+                            else: 
+                                m.player_inventory_select_slot(C.PICKAXE_SLOT)
+                        except Exception as e:
+                            m.echo(f"{m_extra.txt_clr('r')}Error: {e}")
+                            continue
+             
                     
+    def stop(self) -> None:
+        m.echo(f"{m_extra.txt_clr('y')}\nSTOPPING SCRIPT\n")
+        m_extra.toggle_all(False)
+
+        self.stop_tracking = True
+        self._player_info_update_thread.join(timeout=1)
+        self._tool_update_thread.join(timeout=1)
+    
+        m_extra.kill_jobs()
+        
+        
                 
     # def hazard_detection(self):
     #     while (not self.stop_tracking):

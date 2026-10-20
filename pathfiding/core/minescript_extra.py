@@ -2,7 +2,7 @@ import time
 from typing import Iterable
 
 import minescript as m
-import bot.core.constants as C
+from . import constants as C
 
 def txt_clr(color:str = '') -> str:
     """
@@ -36,7 +36,7 @@ def select_slot(slot:int ,items:Iterable[str]) -> None:
     """
     
     while ((not m.player_hand_items().main_hand) or \
-           (m.player_hand_items().main_hand.get("item") not in items)):
+           (m.player_hand_items().main_hand.item not in items)):
         m.player_inventory_select_slot(slot)
         time.sleep(C.ONE_TICK_TIME)
         
@@ -50,7 +50,7 @@ def tap_key(action_key, t=C.ONE_TICK_TIME) -> None:
 def eat_food() -> None:
     m.player_inventory_select_slot(C.FOOD_SLOT)
     
-    if m.player_hand_items() and (m.player_hand_items().main_hand.get("item") in C.FOOD_ITEMS):
+    if m.player_hand_items() and (m.player_hand_items().main_hand.item in C.FOOD_ITEMS):
         m.player_press_use(True)
     else: m.echo(f"{txt_clr('y')}\nNO food in hotbar\n")
     time.sleep(C.ONE_TICK_TIME * 34)

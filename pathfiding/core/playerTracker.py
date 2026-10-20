@@ -3,8 +3,8 @@ import math
 import threading
 
 import minescript as m
-import minescript_extra as m_extra
-import constants as C
+from . import minescript_extra as m_extra
+from . import constants as C
 
 class PlayerTracker:
     def __init__(self):
@@ -114,9 +114,7 @@ class PlayerTracker:
         self._tool_update_thread.join(timeout=1)
     
         m_extra.kill_jobs()
-        
-        
-                
+
     # def hazard_detection(self):
     #     while (not self.stop_tracking):
     #         self.targeted_entity = m.player_get_targeted_entity(5)

@@ -1,11 +1,20 @@
-#include <iostream>
 #include <vector>
 #include <array>
-#include <format>
 
-#include "voxelPreProcessing.hpp"
+#include "VoxelGrid.hpp"
 
-int VoxelGridProcessing::getIndex(const int& x, const int& y, const int& z)
+VoxelGrid::VoxelGrid(int* voxel_grid, const std::vector<coord>& metadata) :
+    _voxel_grid(voxel_grid),
+    _initial_pos(metadata[0]),
+    _min_pos(metadata[1]),
+    _max_pos(metadata[2]),
+    _x_length(_max_pos[0] - _min_pos[0] + 1),
+    _y_length(_max_pos[1] - _min_pos[1] + 1),
+    _z_length(_max_pos[2] - _min_pos[2] + 1)
+{
+}
+
+int VoxelGrid::getIndex(const int& x, const int& y, const int& z)
 {
     // Gets the index into `blocks` sequence for position (x, y, z).
     int x_index = x - _min_pos[0];
@@ -15,19 +24,14 @@ int VoxelGridProcessing::getIndex(const int& x, const int& y, const int& z)
     if (x_index < 0 || x_index >= _x_length ||
         y_index < 0 || y_index >= _y_length || 
         z_index < 0 || z_index >= _z_length)
-    {
-        throw std::out_of_range(
-            std::format("Block position ({}, {}, {})} out of bounds for BlockRegion covering {} to {}", x, y, z, _min_pos, _max_pos)
-        );
-    }
+        return -1;
     
     return x_index + z_index * _x_length + y_index * _x_length * _z_length;
 }
 
-
-std::vector<int> VoxelGridProcessing::extractPPVoxel()
+void VoxelGrid::extractPreProcessVoxel()
 {
-    std::vector<std::array<int, 3>> adj_direction = {
+    std::vector<coord> adj_direction = {
         {0, 1, 0}, {0, -1, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}
     };
 
@@ -38,12 +42,13 @@ std::vector<int> VoxelGridProcessing::extractPPVoxel()
             {
                 block_id = _voxel_grid[getIndex(bx, by, bz)];
                 
-                // Skip processed / impossible blocks (9999)
-                if (block_id == 9999) continue;
+                // Skip processed / impossible blocks
+                if (block_id == BLOCK_BEDROCK ||
+                    block_id == BLOCK_UNBREAKABLE) continue;
 
                 // Environmental Hazards & Padding
-                // Lava - Water proximity (Water = 5 / Lava = 999)
-                if (block_id == 5 || block_id == 999)
+                // Lava - Water proximity
+                if (block_id == BLOCK_WATER || block_id == BLOCK_LAVA)
                 {
                     for (const auto& [dx, dy, dz] : adj_direction)
                     {
@@ -56,19 +61,21 @@ std::vector<int> VoxelGridProcessing::extractPPVoxel()
                             _min_pos[2] <= nz && nz <= _max_pos[2])
                             {
                                 // Mark adjacent blocks as bedrock (impossible path) 
-                                _voxel_grid[getIndex(nx, ny, nz)] = 9999;
+                                int& id = _voxel_grid[getIndex(nx, ny, nz)];
+                                if (id == 1)
+                                    id = BLOCK_UNBREAKABLE;
                             }
                     }
                 }
 
-                // Falling Block Safety (Sand / Gravel = 10)
-                if (block_id == 10)
+                // Falling Block Safety 
+                if (block_id == BLOCK_FALLING)
                 {
                     // 1. Scan upwards to find the exact peak (top layer) of this gravel column
                     int peak_y = by;
                     while (peak_y + 1 <= _max_pos[1])
                     {
-                        if (_voxel_grid[getIndex(bx, peak_y + 1, bz)] == 10)
+                        if (_voxel_grid[getIndex(bx, peak_y + 1, bz)] == BLOCK_FALLING)
                             peak_y++;
                         else
                             break;
@@ -84,19 +91,19 @@ std::vector<int> VoxelGridProcessing::extractPPVoxel()
                             int idx = getIndex(bx, y, bz);
                             
                             // Stop non gravel
-                            if (_voxel_grid[idx] != 10) 
+                            if (_voxel_grid[idx] != BLOCK_FALLING) 
                             {
                                 // Not breakable since top is still gravel
-                                _voxel_grid[idx] = 9999;
+                                _voxel_grid[idx] = BLOCK_UNBREAKABLE;
                                 break; 
                             }
 
                             // Top 2 layers mark as as safe standard block / walkable
                             if (depth_from_top < 2)
-                                _voxel_grid[idx] = 1; 
+                                _voxel_grid[idx] = BLOCK_SOLID; 
                             // Deeper layers underneath mark as unwalkable
                             else
-                                _voxel_grid[idx] = 9999; // Impassable hazard
+                                _voxel_grid[idx] = BLOCK_UNBREAKABLE;
                             depth_from_top++;
                         }
                     }

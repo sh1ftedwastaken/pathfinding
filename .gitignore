@@ -10,3 +10,7 @@ obj/
 *.so
 *.dylib
 *.exe
+
+# Opencode
+.codegraph/
+.omo/

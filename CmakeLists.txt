@@ -1,0 +1,64 @@
+cmake_minimum_required(VERSION 3.18)
+
+project(pathfinding_cpp LANGUAGES CXX)
+
+# A Python extension is ABI-locked to one minor version, so use one build
+# directory per Python version:
+#   cmake -S . -B build-py312 "-DPATHFINDING_PYTHON_VERSION=3.12"
+#   cmake -S . -B build-py313 "-DPATHFINDING_PYTHON_VERSION=3.13"
+#   cmake -S . -B build-py314 "-DPATHFINDING_PYTHON_VERSION=3.14"
+#
+# Or point at an interpreter directly (venv, custom install):
+#   cmake -S . -B build-py312 "-DPATHFINDING_PYTHON_EXECUTABLE=C:/Python312/python.exe"
+#
+# Leave both empty to use the newest installed Python (>= 3.9).
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+option(PATHFINDING_BUILD_PYTHON "Build the pybind11 extension" ON)
+
+set(PATHFINDING_PYTHON_VERSION "" CACHE STRING
+    "Exact Python version (e.g. 3.12); empty = auto-detect")
+set(PATHFINDING_PYTHON_EXECUTABLE "" CACHE FILEPATH
+    "Python interpreter path; empty = auto-detect")
+
+add_library(pathfinding_core STATIC
+    src/AStart.cpp
+    src/Dijkstra.cpp
+    src/VoxelGrid.cpp
+)
+
+target_include_directories(pathfinding_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+set_target_properties(pathfinding_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(PATHFINDING_BUILD_PYTHON)
+    if(PATHFINDING_PYTHON_EXECUTABLE)
+        set(Python_EXECUTABLE "${PATHFINDING_PYTHON_EXECUTABLE}"
+            CACHE FILEPATH "Python interpreter" FORCE)
+    endif()
+
+    if(PATHFINDING_PYTHON_VERSION)
+        find_package(Python ${PATHFINDING_PYTHON_VERSION} EXACT REQUIRED
+                     COMPONENTS Interpreter Development.Module)
+    else()
+        find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module)
+    endif()
+
+    message(STATUS "Python ${Python_VERSION}: ${Python_EXECUTABLE}")
+
+    set(PYBIND11_FINDPYTHON ON CACHE STRING "Use CMake's FindPython")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/pybind11/CMakeLists.txt")
+        add_subdirectory(external/pybind11)
+    else()
+        find_package(pybind11 CONFIG REQUIRED)
+    endif()
+
+    pybind11_add_module(pathfinding src/binding.cpp)
+    target_link_libraries(pathfinding PRIVATE pathfinding_core)
+endif()

@@ -22,7 +22,7 @@ BLOCK_VALUES = {
     "minecraft:gravel"      : 10,
     "minecraft:sand"        : 10,
     "minecraft:water"       : 5, 
-    "minecraft:air"         : 3,  # Not bridging allow
+    "minecraft:air"         : 3,  # 3: not bridging allow / 2: allow bridging
 }
 
 class voxelGrid:
@@ -41,19 +41,19 @@ class voxelGrid:
         self.total_size = self.x_length * self.y_length * self.z_length
         
         # Default value for target
-        BLOCK_VALUES[f"minecraft:{ore}"] = 0 
+        self.block_values = dict(BLOCK_VALUES)
+        self.block_values[f"minecraft:{ore}"] = 0
         if allow_bridging:
-            BLOCK_VALUES["minecraft:air"] = 2
+            self.block_values["minecraft:air"] = 2
         
         # Initialize flat buffer with "i" (signed 32-bit int) 
         self.voxel_buffer = array(
-            "i", [BLOCK_VALUES["minecraft:air"]] * self.total_size 
+            "i", [self.block_values["minecraft:air"]] * self.total_size 
         )
         
     @staticmethod
     def _parse_block_name_format(block_name: str) -> str:
         return block_name.partition("[")[0].replace("deepslate_", "")
-        
         
     @staticmethod
     def _extract_voxel_block_pack(
@@ -129,13 +129,12 @@ class voxelGrid:
             )
 
         return x_index + z_index * self.x_length + y_index * self.x_length * self.z_length
-    
 
     def extract_voxel_grid(self) -> tuple[array, tuple]:
         for tile in self.parser.tiles:
             # Populate fill regions
             for fill_pos1, fill_pos2, block_id in tile.iter_fill_params():
-                val = BLOCK_VALUES.get(
+                val = self.block_values.get(
                     self._parse_block_name_format(self.parser.palette[block_id]), 1
                 )
                 x1, y1, z1 = fill_pos1
@@ -153,7 +152,7 @@ class voxelGrid:
 
             # Populate individual set_blocks
             for pos, block_id in tile.iter_setblock_params():
-                val = BLOCK_VALUES.get(
+                val = self.block_values.get(
                     self._parse_block_name_format(self.parser.palette[block_id]), 1
                 )
                 x, y, z = pos

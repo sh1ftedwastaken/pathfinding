@@ -15,45 +15,46 @@ from . import constants as C
 from . import minescript_extra as m_extra
 from .voxelGridExtraction import voxelGrid
 
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_DIST_DIR = _PROJECT_ROOT / "dist"
+_DIST_DIR = _PROJECT_ROOT / "dist"          # C++ binding
 if str(_DIST_DIR) not in sys.path:
     sys.path.insert(0, str(_DIST_DIR))
 
-import pathfinding  # noqa: E402  (path is configured above)
+import pathfinding
 
 
 Coord = tuple[int, int, int]
 
 DEFAULT_ORE = f"{C.MINING_ORE}_ore"
-GLASS_BLOCK = "minecraft:glass"
-AIR_BLOCK = "minecraft:air"
+GLASS_BLOCK = "minecraft:lime_stained_glass"
 COMMAND_FLUSH_INTERVAL = 128
-MIN_WORLD_Y = -64
 
 
 class PathfindingError(RuntimeError):
-    """Raised when a path request cannot be fulfilled."""
+    """Raised when a path request have a problem."""
 
 
 @dataclass(frozen=True)
 class PathResult:
-    algorithm: str
-    start: Coord
-    end: Coord
-    path: tuple[Coord, ...]
-    min_y: int
-    elapsed_seconds: float
+    algorithm:str
+    start:Coord
+    end:Coord
+    path:tuple[Coord, ...]
+    min_y:int
+    elapsed_seconds:float
 
 
+
+# ------------------------------------------------------------------
+# Pathfinding
+# ------------------------------------------------------------------
 def _as_coord(value) -> Coord:
     if len(value) != 3:
-        raise PathfindingError(f"Expected 3 coordinates, got {value!r}")
+        raise PathfindingError(f"Expected 3 coordinates (x, y, z), but got {value!r}")
     return (int(value[0]), int(value[1]), int(value[2]))
 
 
-def _in_bounds(position: Coord, min_pos: Coord, max_pos: Coord) -> bool:
+def _in_bounds(position:Coord, min_pos:Coord, max_pos:Coord) -> bool:
     return all(
         min_pos[axis] <= position[axis] <= max_pos[axis]
         for axis in range(3)
@@ -64,32 +65,26 @@ def format_coord(position: Coord) -> str:
     return f"({position[0]}, {position[1]}, {position[2]})"
 
 
-def _create_pathfinder(ore: str = DEFAULT_ORE):
+def _create_pathfinder(ore:str = DEFAULT_ORE):
     voxel = voxelGrid(ore=ore)
     voxel_buffer, metadata = voxel.extract_voxel_grid()
 
-    initial_pos, min_pos, max_pos = metadata
-    initial_pos = _as_coord(initial_pos)
-    min_pos = _as_coord(min_pos)
-    max_pos = _as_coord(max_pos)
-
+    initial_pos, min_pos, max_pos = map(_as_coord, metadata)
+    
     grid = pathfinding.VoxelGrid(
         voxel_buffer,
         (initial_pos, min_pos, max_pos),
     )
 
-    # The C++ object holds a pointer into voxel_buffer.  The pybind11
-    # keep_alive policy retains it, but returning it here also makes the
-    # ownership explicit for callers.
     return grid, voxel_buffer, min_pos, max_pos
 
 
 def find_path(
-    algorithm: str,
-    start: Coord,
-    target: Coord | None = None,
+    algorithm:str,
+    start:Coord,
+    target:Coord | None = None,
     *,
-    ore: str = DEFAULT_ORE,
+    ore:str = DEFAULT_ORE,
 ) -> PathResult:
     """Compute a path from ``start`` to ``target`` or the best ore cluster."""
     if algorithm not in {"astar", "dijkstra"}:
@@ -98,7 +93,7 @@ def find_path(
     start = _as_coord(start)
 
     m.echo(f"{m_extra.txt_clr('g')}Extracting {ore} voxel grid...")
-    grid, _voxel_buffer, min_pos, max_pos = _create_pathfinder(ore=ore)
+    grid, _, min_pos, max_pos = _create_pathfinder(ore=ore)
 
     if not _in_bounds(start, min_pos, max_pos):
         raise PathfindingError(
@@ -106,12 +101,11 @@ def find_path(
             f"{format_coord(min_pos)}..{format_coord(max_pos)}"
         )
 
-    # This also preprocesses hazards (lava/water/falling blocks), so it must
-    # run even when the caller supplied an explicit destination.
+    # This also preprocesses hazards and returns cluster center (target)
     cluster_center = grid.extractPreProcessVoxel()
 
-    if target is None:
-        if cluster_center is None:
+    if not target:
+        if not cluster_center:
             raise PathfindingError(f"No {ore} cluster found in the extraction radius")
         end = _as_coord(cluster_center)
         m.echo(
@@ -159,36 +153,67 @@ def find_path(
     )
 
 
-def iter_glass_commands(path: tuple[Coord, ...], min_y: int = MIN_WORLD_Y):
-    """Yield setblock commands that carve the path and lay a glass floor."""
-    for x, y, z in path:
-        yield f"setblock {x} {y} {z} {AIR_BLOCK} replace"
-        yield f"setblock {x} {y + 1} {z} {AIR_BLOCK} replace"
+# ------------------------------------------------------------------
+# Minecraft CLI for Path Generation 
+# ------------------------------------------------------------------
 
-        if y - 1 >= min_y:
-            yield f"setblock {x} {y - 1} {z} {GLASS_BLOCK} replace"
+def _diagonal_clearance_cell(previous:Coord, current:Coord) -> Coord | None:
+    """Adds extra sweep block for diagonal up / down movements"""
+    px, py, pz = previous
+    cx, cy, cz = current
+
+    if cx == px and cz == pz:
+        return None
+    if cy > py:
+        return (px, py + 2, pz)
+    if cy < py:
+        return (cx, py + 1, cz)
+    return None
+
+
+def iter_glass_cells(path:tuple[Coord, ...]):
+    seen:set[Coord] = set()
+
+    for i, (x, y, z) in enumerate(path):
+        cells = [(x, y, z), (x, y + 1, z)]
+
+        if i + 1 < len(path):
+            clearance = _diagonal_clearance_cell((x, y, z), path[i + 1])
+            if clearance is not None:
+                cells.append(clearance)
+
+        for cell in cells:
+            if cell in seen:
+                continue
+            seen.add(cell)
+            
+            # Hold value until it is ask 
+            yield cell
+
+
+def iter_glass_commands(path:tuple[Coord, ...]):
+    """Yield path generator commands"""
+    for x, y, z in iter_glass_cells(path):
+        yield f"setblock {x} {y} {z} {GLASS_BLOCK} replace"
 
 
 def build_glass_path(
-    path: tuple[Coord, ...],
+    path:tuple[Coord, ...],
     wait_seconds: float = 0.0,
     *,
-    min_y: int = MIN_WORLD_Y,
     stop_event: threading.Event | None = None,
 ) -> int:
-    """Build the path in-game, returning the number of issued commands."""
+    """Build the path in-game, returning the number of commands."""
     if wait_seconds < 0:
         raise ValueError("wait_seconds cannot be negative")
-    if not math.isfinite(wait_seconds):
-        raise ValueError("wait_seconds must be finite")
 
-    issued = 0
-    for command in iter_glass_commands(path, min_y=min_y):
+    count = 0
+    for command in iter_glass_commands(path):
         if stop_event is not None and stop_event.is_set():
             break
 
         m.execute(command)
-        issued += 1
+        count += 1
 
         if wait_seconds > 0:
             m.flush()
@@ -196,8 +221,8 @@ def build_glass_path(
                 stop_event.wait(wait_seconds)
             else:
                 time.sleep(wait_seconds)
-        elif issued % COMMAND_FLUSH_INTERVAL == 0:
+        elif count % COMMAND_FLUSH_INTERVAL == 0:
             m.flush()
 
     m.flush()
-    return issued
+    return count

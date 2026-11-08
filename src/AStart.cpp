@@ -102,9 +102,9 @@ std::vector<coord> VoxelGrid::AStart(
 
         for (const auto& move : movements)
         {   
-            int dx = move[0];
-            int dy = move[1];
-            int dz = move[2];
+            const int dx = move[0];
+            const int dy = move[1];
+            const int dz = move[2];
 
             coord neighbor_pos = {
                 curr_pos[0] + dx, 
@@ -124,6 +124,30 @@ std::vector<coord> VoxelGrid::AStart(
                 neighbor_head_idx == -1 || 
                 neighbor_floor_idx == -1) 
                 continue;
+
+            // Check if is a obstacle
+            if (is_blocked(_voxel_grid[neighbor_foot_idx]) ||
+                is_blocked(_voxel_grid[neighbor_head_idx]))
+                continue;
+
+            // Check the extra block swept by a vertical diagonal.
+            const bool diagonal_move = dx != 0 || dz != 0;
+            if (diagonal_move && dy == 1)
+            {
+                const int above_head_idx = getIndex(
+                    curr_pos[0], curr_pos[1] + 2, curr_pos[2]);
+                if (above_head_idx == -1 ||
+                    is_blocked(_voxel_grid[above_head_idx]))
+                    continue;
+            }
+            else if (diagonal_move && dy == -1)
+            {
+                const int front_head_idx = getIndex(
+                    neighbor_pos[0], curr_pos[1] + 1, neighbor_pos[2]);
+                if (front_head_idx == -1 ||
+                    is_blocked(_voxel_grid[front_head_idx]))
+                    continue;
+            }
             
             // Check if floor is walkable
             if (_voxel_grid[neighbor_floor_idx] == BLOCK_WATER ||
@@ -132,11 +156,6 @@ std::vector<coord> VoxelGrid::AStart(
 
             // Check if already seen
             if (closed_set.count(neighbor_pos) == 1)
-                continue;
-            
-            // Check if is a obstacle
-            if (is_blocked(_voxel_grid[neighbor_foot_idx]) ||
-                is_blocked(_voxel_grid[neighbor_head_idx]))
                 continue;
 
             // Check if the floor beneath the neighbor is air (stepping off a ledge)

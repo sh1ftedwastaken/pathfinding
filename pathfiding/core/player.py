@@ -1,5 +1,3 @@
-"""Shared player state tracker used by every Minescript script in this repo."""
-
 from __future__ import annotations
 
 import math
@@ -51,9 +49,7 @@ class Player:
 
         self.start(track_hand_items=track_hand_items)
 
-    # ------------------------------------------------------------------
-    # Public state
-    # ------------------------------------------------------------------
+
     @property
     def position(self) -> tuple[int, int, int]:
         """Floored foot position, suitable for pathfinding coordinates."""
@@ -82,7 +78,7 @@ class Player:
         return C.YAW_FACING_NORTH
 
     def start(self, *, track_hand_items: bool = True) -> None:
-        """Start background tracking once; repeated calls are harmless."""
+        """Start background tracking once"""
         with self._lock:
             if self._started:
                 return

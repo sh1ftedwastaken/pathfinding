@@ -154,6 +154,27 @@ std::vector<coord> VoxelGrid::Dijkstra(
                 continue;
             }
 
+            // check the extra block swept by a vertical diagonal.
+            const bool diagonalMove = dx != 0 || dz != 0;
+            if (diagonalMove && dy == 1) {
+                const int aboveHeadIndex = getIndex(
+                    currentPos[0], currentPos[1] + 2, currentPos[2]
+                );
+                if (aboveHeadIndex == -1 ||
+                    isBlocked(_voxel_grid[aboveHeadIndex])) {
+                    continue;
+                }
+            }
+            else if (diagonalMove && dy == -1) {
+                const int frontHeadIndex = getIndex(
+                    neighborPos[0], currentPos[1] + 1, neighborPos[2]
+                );
+                if (frontHeadIndex == -1 ||
+                    isBlocked(_voxel_grid[frontHeadIndex])) {
+                    continue;
+                }
+            }
+
             // If the neighboring position steps over air, scan downward
             // to find the landing position. This mirrors A*'s drop rule.
             int dropDistance = 0;

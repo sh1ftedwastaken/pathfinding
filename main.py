@@ -163,7 +163,6 @@ def _run_request(request: PathfindRequest, player: Player) -> None:
         issued = build_glass_path(
             result.path,
             wait_seconds=request.wait_seconds,
-            min_y=result.min_y,
             stop_event=_STOP_EVENT,
         )
 

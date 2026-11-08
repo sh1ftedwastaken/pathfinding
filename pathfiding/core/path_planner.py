@@ -6,6 +6,7 @@ import math
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,7 +27,12 @@ import pathfinding
 Coord = tuple[int, int, int]
 
 DEFAULT_ORE = f"{C.MINING_ORE}_ore"
-GLASS_BLOCK = "minecraft:lime_stained_glass"
+GREEN_GLASS_BLOCK = "minecraft:green_stained_glass"
+YELLOW_GLASS_BLOCK = "minecraft:yellow_stained_glass"
+RED_GLASS_BLOCK = "minecraft:red_stained_glass"
+AIR_BLOCK = "minecraft:air"
+GREEN_GLASS_RETAIN = 8
+YELLOW_GLASS_RETAIN = 6
 COMMAND_FLUSH_INTERVAL = 128
 
 
@@ -157,44 +163,95 @@ def find_path(
 # Minecraft CLI for Path Generation 
 # ------------------------------------------------------------------
 
-def _diagonal_clearance_cell(previous:Coord, current:Coord) -> Coord | None:
-    """Adds extra sweep block for diagonal up / down movements"""
+def _body_cells(feet: Coord) -> tuple[Coord, Coord]:
+    """Return the feet and head cells for a player standing at ``feet``."""
+    x, y, z = feet
+    return ((x, y, z), (x, y + 1, z))
+
+
+def _transition_cells(previous: Coord, current: Coord):
+    """Yield body cells occupied while moving or dropping between nodes."""
     px, py, pz = previous
     cx, cy, cz = current
+    horizontal = cx != px or cz != pz
 
-    if cx == px and cz == pz:
-        return None
-    if cy > py:
-        return (px, py + 2, pz)
     if cy < py:
-        return (cx, py + 1, cz)
-    return None
+        # Enter the destination column at the old height, then fill every
+        # body cell down to the landing height. This handles diagonal drops,
+        # straight drops, and jumps down a ledge.
+        start_y = py if horizontal else py - 1
+        for y in range(start_y, cy - 1, -1):
+            yield from _body_cells((cx, y, cz))
+    elif cy > py and horizontal:
+        # Diagonal step-up: the head sweeps through the cell above the
+        # previous head.
+        yield (px, py + 2, pz)
 
 
-def iter_glass_cells(path:tuple[Coord, ...]):
-    seen:set[Coord] = set()
+def _set_block(cell: Coord, block: str) -> str:
+    x, y, z = cell
+    return f"setblock {x} {y} {z} {block} replace"
 
-    for i, (x, y, z) in enumerate(path):
-        cells = [(x, y, z), (x, y + 1, z)]
 
-        if i + 1 < len(path):
-            clearance = _diagonal_clearance_cell((x, y, z), path[i + 1])
-            if clearance is not None:
-                cells.append(clearance)
+def iter_glass_cells(path: tuple[Coord, ...]):
+    seen: set[Coord] = set()
 
-        for cell in cells:
+    for index, feet in enumerate(path):
+        if index:
+            for cell in _transition_cells(path[index - 1], feet):
+                if cell in seen:
+                    continue
+                seen.add(cell)
+                yield cell
+
+        for cell in _body_cells(feet):
             if cell in seen:
                 continue
             seen.add(cell)
-            
-            # Hold value until it is ask 
             yield cell
 
 
-def iter_glass_commands(path:tuple[Coord, ...]):
-    """Yield path generator commands"""
-    for x, y, z in iter_glass_cells(path):
-        yield f"setblock {x} {y} {z} {GLASS_BLOCK} replace"
+def iter_glass_commands(path: tuple[Coord, ...]):
+    """Yield the animated green/yellow/red glass trail commands."""
+    green: deque[Coord] = deque()
+    yellow: deque[Coord] = deque()
+    red: Coord | None = None
+
+    for cell in iter_glass_cells(path):
+        # The previous red cell only survives for one generation step.
+        if red is not None:
+            yield _set_block(red, AIR_BLOCK)
+            red = None
+
+        yield _set_block(cell, GREEN_GLASS_BLOCK)
+        green.append(cell)
+
+        if len(green) > GREEN_GLASS_RETAIN:
+            yellow_cell = green.popleft()
+            yield _set_block(yellow_cell, YELLOW_GLASS_BLOCK)
+            yellow.append(yellow_cell)
+
+        if len(yellow) > YELLOW_GLASS_RETAIN:
+            red_cell = yellow.popleft()
+            yield _set_block(red_cell, RED_GLASS_BLOCK)
+            red = red_cell
+
+    # Continue the same colour wave after the last path cell until every
+    # remaining glass cell has been replaced with air. One air command is
+    # emitted per cell, so the trail shrinks gradually instead of all at once.
+    while red is not None or green or yellow:
+        if red is not None:
+            yield _set_block(red, AIR_BLOCK)
+            red = None
+
+        if yellow:
+            red = yellow.popleft()
+            yield _set_block(red, RED_GLASS_BLOCK)
+
+        if green:
+            yellow_cell = green.popleft()
+            yield _set_block(yellow_cell, YELLOW_GLASS_BLOCK)
+            yellow.append(yellow_cell)
 
 
 def build_glass_path(

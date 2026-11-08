@@ -22,7 +22,8 @@ PYBIND11_MODULE(pathfinding, m)
 
         .def("getIndex", &VoxelGrid::getIndex,
              py::arg("x"), py::arg("y"), py::arg("z"))
-        .def("extractPreProcessVoxel", &VoxelGrid::extractPreProcessVoxel)
+        .def("extractPreProcessVoxel", &VoxelGrid::extractPreProcessVoxel,
+             "Mark hazards and return the best ore cluster center, or None.")
         .def("AStart", &VoxelGrid::AStart,
              py::arg("start_pos"), py::arg("end_pos"))
         .def("Dijkstra", &VoxelGrid::Dijkstra,

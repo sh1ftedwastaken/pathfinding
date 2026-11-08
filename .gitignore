@@ -11,6 +11,12 @@ obj/
 *.dylib
 *.exe
 
+# Prebuilt Python extensions are intentionally distributable
+!dist/
+!dist/*.pyd
+!dist/*.so
+!dist/*.dylib
+
 # Opencode
 .codegraph/
 .omo/

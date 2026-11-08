@@ -1,7 +1,24 @@
-#include <vector>
 #include <array>
+#include <cmath>
+#include <optional>
+#include <vector>
+#include <unordered_set>
 
 #include "VoxelGrid.hpp"
+
+struct Cluster
+{
+    coord center;
+    int size;
+    long long distance;
+};
+
+long long manhattanDistance(const coord& a, const coord& b)
+{
+    return std::abs(static_cast<long long>(a[0]) - b[0]) +
+           std::abs(static_cast<long long>(a[1]) - b[1]) +
+           std::abs(static_cast<long long>(a[2]) - b[2]);
+}
 
 VoxelGrid::VoxelGrid(int* voxel_grid, const std::vector<coord>& metadata) :
     _voxel_grid(voxel_grid),
@@ -29,15 +46,20 @@ int VoxelGrid::getIndex(const int& x, const int& y, const int& z)
     return x_index + z_index * _x_length + y_index * _x_length * _z_length;
 }
 
-void VoxelGrid::extractPreProcessVoxel()
+std::optional<coord> VoxelGrid::extractPreProcessVoxel()
 {
     std::vector<coord> adj_direction = {
         {0, 1, 0}, {0, -1, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}
     };
 
+    std::vector<coord> ore_coords;
+
+    // Preprocessing hazard and ore blocks
     int block_id;
     for (int bx = _min_pos[0]; bx <= _max_pos[0]; bx++)
+    {
         for (int by = _min_pos[1]; by <= _max_pos[1]; by++)
+        {
             for (int bz = _min_pos[2]; bz <= _max_pos[2]; bz++)
             {
                 block_id = _voxel_grid[getIndex(bx, by, bz)];
@@ -45,6 +67,10 @@ void VoxelGrid::extractPreProcessVoxel()
                 // Skip processed / impossible blocks
                 if (block_id == BLOCK_BEDROCK ||
                     block_id == BLOCK_UNBREAKABLE) continue;
+
+                // Python marks the requested ore with id 0.
+                if (block_id == 0)
+                    ore_coords.push_back({bx, by, bz});
 
                 // Environmental Hazards & Padding
                 // Lava - Water proximity
@@ -107,6 +133,120 @@ void VoxelGrid::extractPreProcessVoxel()
                             depth_from_top++;
                         }
                     }
-                }              
+                }
             }
+        }
+    }
+
+    // Find coords of the best ore cluster
+    if (ore_coords.empty())
+        return std::nullopt;
+
+    std::unordered_set<int> visited;
+    std::vector<Cluster> clusters;
+
+    for (const coord& c : ore_coords)
+    {
+        int c_idx = getIndex(c[0], c[1], c[2]);
+        if (visited.count(c_idx) == 1)
+            continue;
+
+        long long sum_x = 0;
+        long long sum_y = 0;
+        long long sum_z = 0;
+        int size = 0;
+
+        std::vector<coord> stack = {c};
+        visited.insert(c_idx);
+
+        while (!stack.empty())
+        {
+            coord current = stack.back();
+            stack.pop_back();
+
+            sum_x += current[0];
+            sum_y += current[1];
+            sum_z += current[2];
+            ++size;
+
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+                for (int dy = -1; dy <= 1; ++dy)
+                {
+                    for (int dz = -1; dz <= 1; ++dz)
+                    {
+                        if (dx == 0 && dy == 0 && dz == 0)
+                            continue;
+
+                        coord neighbor = {
+                            current[0] + dx,
+                            current[1] + dy,
+                            current[2] + dz
+                        };
+
+                        int neighbor_idx = getIndex(
+                            neighbor[0], neighbor[1], neighbor[2]);
+
+                        if (neighbor_idx == -1 ||
+                            visited.count(neighbor_idx) == 1 ||
+                            _voxel_grid[neighbor_idx] != 0)
+                            continue;
+
+                        visited.insert(neighbor_idx);
+                        stack.push_back(neighbor);
+                    }
+                }
+            }
+        }
+
+        coord center = {
+            static_cast<int>(std::floor(static_cast<double>(sum_x) / size)),
+            static_cast<int>(std::floor(static_cast<double>(sum_y) / size)),
+            static_cast<int>(std::floor(static_cast<double>(sum_z) / size))
+        };
+
+        clusters.push_back({
+            center,
+            size,
+            manhattanDistance(center, _initial_pos)
+        });
+    }
+
+    const Cluster* best_cluster = nullptr;
+    double best_cluster_score = 0.0;
+
+    // Check for cluster close to player
+    for (const Cluster& cluster : clusters)
+    {
+        if (cluster.distance > CLUSTER_CLOSE_TO_PLAYER)
+            continue;
+
+        double score =
+            CLUSTER_DISTANCE_SCORE * static_cast<double>(cluster.distance) -
+            CLUSTER_SIZE_SCORE * static_cast<double>(cluster.size);
+
+        if (best_cluster == nullptr || score <= best_cluster_score)
+        {
+            best_cluster = &cluster;
+            best_cluster_score = score;
+        }
+    }
+
+    if (best_cluster != nullptr)
+        return best_cluster->center;
+
+    // None of the cluster is close to player
+    // Check for far clusters and return center of best one
+    best_cluster = &clusters.front();
+    for (const Cluster& cluster : clusters)
+    {
+        if (cluster.size > best_cluster->size ||
+            (cluster.size == best_cluster->size &&
+             cluster.distance < best_cluster->distance))
+        {
+            best_cluster = &cluster;
+        }
+    }
+
+    return best_cluster->center;
 }

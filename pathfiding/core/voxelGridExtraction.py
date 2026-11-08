@@ -2,6 +2,7 @@ from array import array
 import minescript as m
 
 from . import constants as C
+from . import minescript_extra as m_extra
 from .lib_blockpack_parser import BlockPackParser
 
 NETHER_ORES = {
@@ -78,7 +79,10 @@ class voxelGrid:
             (ore in NETHER_ORES and dimension != "nether") or
             (ore not in NETHER_ORES and dimension in {"nether", "end"})
         ):
-            m.echo(f"Invalid Search: There is not {ore} in the {dimension}.")
+            m.echo(
+                f"{m_extra.txt_clr('r')}Invalid Search: "
+                f"There is no {ore} in the {dimension}."
+            )
             return None
         
         bx, by, bz = map(int, m.player().position)
@@ -103,11 +107,17 @@ class voxelGrid:
             )
             
             if has_target:
-                m.echo(f"Successfully extracted grid at radius r={r}")
+                m.echo(
+                    f"{m_extra.txt_clr('g')}Successfully extracted grid "
+                    f"at radius r={r}"
+                )
                 break
             
             if r >= max_r:
-                m.echo(f"Extraction FAIL. No {ore} found in a radius of {r}")
+                m.echo(
+                    f"{m_extra.txt_clr('r')}Extraction FAIL. "
+                    f"No {ore} found in a radius of {r}"
+                )
                 return None
             else:
                 r += step
@@ -166,9 +176,6 @@ class voxelGrid:
         metadata = (self.initial_pos, self.min_pos, self.max_pos)
         return self.voxel_buffer, metadata
 
-        
-        
-        
                 
             
             

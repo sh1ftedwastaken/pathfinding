@@ -13,15 +13,6 @@
 
 using coord = std::array<int, 3>;
 
-double manhattanDistance(coord pos1, coord pos2) 
-{
-    return static_cast<double>(
-        std::abs(pos1[0] - pos2[0]) + 
-        std::abs(pos1[1] - pos2[1]) + 
-        std::abs(pos1[2] - pos2[2])
-    );
-}
-
 bool is_blocked(int v) {
     return v == BLOCK_BEDROCK || v == BLOCK_WATER || v == BLOCK_UNBREAKABLE || v == BLOCK_LAVA;
 }
@@ -133,6 +124,11 @@ std::vector<coord> VoxelGrid::AStart(
                 neighbor_head_idx == -1 || 
                 neighbor_floor_idx == -1) 
                 continue;
+            
+            // Check if floor is walkable
+            if (_voxel_grid[neighbor_floor_idx] == BLOCK_WATER ||
+                _voxel_grid[neighbor_floor_idx] == BLOCK_LAVA)
+                continue;
 
             // Check if already seen
             if (closed_set.count(neighbor_pos) == 1)
@@ -193,13 +189,13 @@ std::vector<coord> VoxelGrid::AStart(
             double move_cost = 1.0;
             int target_block_id = _voxel_grid[neighbor_foot_idx];
 
-            if (target_block_id == 2 || target_block_id == 3) {
+            if (target_block_id == BLOCK_AIR || target_block_id == BLOCK_AIR_NO_BRIDGE) {
                 move_cost = 1.0;  // Air
             } 
-            else if (target_block_id == 1) {
+            else if (target_block_id == BLOCK_SOLID) {
                 move_cost = 15.0; // Solid block
             }
-            else if (target_block_id == 11) {
+            else if (target_block_id == BLOCK_MAGMA) {
                 move_cost = 30.0; // Magma block
             }
 
@@ -215,7 +211,7 @@ std::vector<coord> VoxelGrid::AStart(
                 continue;
             Node* neighbor_node = make_node(neighbor_pos, curr_node);
             neighbor_node->g = tentative_g;
-            neighbor_node->h = manhattanDistance(neighbor_pos, end_pos);
+            neighbor_node->h = static_cast<double>(manhattanDistance(neighbor_pos, end_pos));
             neighbor_node->f = neighbor_node->g + neighbor_node->h;
             
             best_g[neighbor_pos] = tentative_g;

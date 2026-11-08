@@ -1,4 +1,5 @@
-# from core.playerTracker import PlayerTracker
+"""Shared modules for the pathfinding scripts."""
 
-# Initialization 
-# player = PlayerTracker()
+from .player import Player, get_player
+
+__all__ = ["Player", "get_player"]

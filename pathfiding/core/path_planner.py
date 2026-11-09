@@ -47,6 +47,7 @@ class PathResult:
     path:tuple[Coord, ...]
     min_y:int
     elapsed_seconds:float
+    total_elapsed_seconds:float = 0.0
     radius:int = 0
     voxel_count:int = 0
     nodes_expanded:int = 0
@@ -101,6 +102,7 @@ def find_path(
         raise PathfindingError(f"Unknown algorithm: {algorithm}")
 
     start = _as_coord(start)
+    total_started_at = time.perf_counter()
 
     m.echo(f"{m_extra.txt_clr('g')}Extracting {ore} voxel grid...")
     grid, _, initial_pos, min_pos, max_pos = _create_pathfinder(ore=ore)
@@ -151,20 +153,20 @@ def find_path(
     )
 
     started_at = time.perf_counter()
-    if benchmark:
-        if algorithm == "astar":
-            raw_path = grid.AStart(start, end, True)
-            stats = pathfinding.getLastAStarResult()
-        else:
-            raw_path = grid.Dijkstra(start, end, True)
-            stats = pathfinding.getLastDijkstraResult()
+    if algorithm == "astar":
+        raw_path = grid.AStart(start, end, benchmark)
     else:
-        if algorithm == "astar":
-            raw_path = grid.AStart(start, end)
-        else:
-            raw_path = grid.Dijkstra(start, end)
-        stats = None
+        raw_path = grid.Dijkstra(start, end, benchmark)
     elapsed = time.perf_counter() - started_at
+
+    if benchmark:
+        stats = (
+            pathfinding.getLastAStarResult()
+            if algorithm == "astar"
+            else pathfinding.getLastDijkstraResult()
+        )
+    else:
+        stats = None
 
     if not raw_path:
         raise PathfindingError(
@@ -176,6 +178,8 @@ def find_path(
     if path[0] != start or path[-1] != end:
         raise PathfindingError("Pathfinder returned an invalid endpoint")
 
+    total_elapsed = time.perf_counter() - total_started_at
+
     return PathResult(
         algorithm=algorithm,
         start=start,
@@ -183,6 +187,7 @@ def find_path(
         path=path,
         min_y=min_pos[1],
         elapsed_seconds=elapsed,
+        total_elapsed_seconds=total_elapsed,
         radius=radius,
         voxel_count=voxel_count,
         nodes_expanded=int(stats.get("nodesExpanded", 0)) if stats else 0,

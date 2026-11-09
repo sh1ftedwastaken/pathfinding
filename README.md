@@ -82,9 +82,9 @@ f(n) = g(n) + h(n)
 where:
 
 - `g(n)` is the accumulated movement cost
-- `h(n)` is the Manhattan distance to the target
+- `h(n)` is an admissible move-count lower bound based on horizontal distance and the maximum vertical progress per move
 
-The heuristic guides the search toward the destination.
+The heuristic is admissible and consistent, so A* returns the same optimal path cost as Dijkstra.
 
 #### Dijkstra
 

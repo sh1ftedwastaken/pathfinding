@@ -19,8 +19,8 @@ namespace {
 
 struct FrontierNode
 {
-    double f;
-    double g;
+    int f;
+    int g;
     coord position;
 };
 
@@ -36,18 +36,33 @@ struct CompareFrontierNodes
     }
 };
 
-double aStarHeuristic(const coord& from, const coord& to)
+int aStarHeuristic(const coord& from, const coord& to)
 {
-    const long long dx = std::llabs(
-        static_cast<long long>(to[0]) - from[0]);
-    const long long dz = std::llabs(
-        static_cast<long long>(to[2]) - from[2]);
-    const long long dy = static_cast<long long>(to[1]) - from[1];
+    const int dx = std::abs(to[0] - from[0]);
+    const int dz = std::abs(to[2] - from[2]);
+    const int dy = to[1] - from[1];
 
-    const long long horizontalMoves = dx + dz;
-    const long long verticalMoves = dy > 0 ? dy : ((-dy) + 3) / 4;
+    const int horizontalMoves = dx + dz;
 
-    return static_cast<double>(std::max(horizontalMoves, verticalMoves));
+    if (dy > 0)
+    {
+        int moves = std::max(horizontalMoves, dy);
+
+        // Every upward move also changes the horizontal Manhattan
+        // distance by one, so an odd mismatch needs one extra move.
+        if (dy > horizontalMoves && ((dy - horizontalMoves) & 1))
+            ++moves;
+
+        return moves;
+    }
+
+    if (dy < 0)
+    {
+        const int verticalMoves = (-dy + 3) / 4;
+        return std::max(horizontalMoves, verticalMoves);
+    }
+
+    return horizontalMoves;
 }
 
 }
@@ -94,19 +109,35 @@ std::vector<coord> VoxelGrid::AStart(
         5, 998, 999, 9999
     */
 
-    const int startIndex = getIndex(
+    const int cellCount = _x_length * _y_length * _z_length;
+
+    auto indexOf = [&](const int x, const int y, const int z) -> int {
+        const int xIndex = x - _min_pos[0];
+        const int yIndex = y - _min_pos[1];
+        const int zIndex = z - _min_pos[2];
+
+        if (xIndex < 0 || xIndex >= _x_length ||
+            yIndex < 0 || yIndex >= _y_length ||
+            zIndex < 0 || zIndex >= _z_length)
+        {
+            return -1;
+        }
+
+        return xIndex + zIndex * _x_length +
+               yIndex * _x_length * _z_length;
+    };
+
+    const int startIndex = indexOf(
         start_pos[0], start_pos[1], start_pos[2]);
-    const int endIndex = getIndex(
+    const int endIndex = indexOf(
         end_pos[0], end_pos[1], end_pos[2]);
 
     if (startIndex == -1 || endIndex == -1)
         return {};
 
-    const int cellCount = _x_length * _y_length * _z_length;
-    const double infinity = std::numeric_limits<double>::infinity();
-
-    std::vector<double> best_g(
-        static_cast<std::size_t>(cellCount), infinity);
+    std::vector<int> best_g(
+        static_cast<std::size_t>(cellCount),
+        std::numeric_limits<int>::max());
     std::vector<int> parent(
         static_cast<std::size_t>(cellCount), -1);
     std::vector<unsigned char> closed(
@@ -132,10 +163,10 @@ std::vector<coord> VoxelGrid::AStart(
         CompareFrontierNodes
     > open_list;
 
-    best_g[startIndex] = 0.0;
+    best_g[startIndex] = 0;
     open_list.push({
         aStarHeuristic(start_pos, end_pos),
-        0.0,
+        0,
         start_pos
     });
 
@@ -147,7 +178,7 @@ std::vector<coord> VoxelGrid::AStart(
         const FrontierNode current = open_list.top();
         open_list.pop();
 
-        const int currentIndex = getIndex(
+        const int currentIndex = indexOf(
             current.position[0],
             current.position[1],
             current.position[2]);
@@ -186,9 +217,9 @@ std::vector<coord> VoxelGrid::AStart(
                 result.found = !path.empty();
                 result.nodesExpanded = nodes_expanded;
                 result.peakFrontierSize = peak_frontier_size;
-                result.pathCost = current.g;
+                result.pathCost = static_cast<double>(current.g);
                 result.estimatedMemoryBytes =
-                    best_g.size() * sizeof(double) +
+                    best_g.size() * sizeof(int) +
                     parent.size() * sizeof(int) +
                     closed.size() * sizeof(unsigned char);
                 result.runtimeMs = std::chrono::duration<double, std::milli>(
@@ -215,11 +246,11 @@ std::vector<coord> VoxelGrid::AStart(
                 current.position[2] + dz
             };
 
-            int neighbor_head_idx = getIndex(
+            int neighbor_head_idx = indexOf(
                 neighbor_pos[0], neighbor_pos[1] + 1, neighbor_pos[2]);
-            int neighbor_foot_idx = getIndex(
+            int neighbor_foot_idx = indexOf(
                 neighbor_pos[0], neighbor_pos[1], neighbor_pos[2]);
-            int neighbor_floor_idx = getIndex(
+            int neighbor_floor_idx = indexOf(
                 neighbor_pos[0], neighbor_pos[1] - 1, neighbor_pos[2]);
 
             // Check boundaries
@@ -237,7 +268,7 @@ std::vector<coord> VoxelGrid::AStart(
             const bool diagonal_move = dx != 0 || dz != 0;
             if (diagonal_move && dy == 1)
             {
-                const int above_head_idx = getIndex(
+                const int above_head_idx = indexOf(
                     current.position[0],
                     current.position[1] + 2,
                     current.position[2]);
@@ -247,7 +278,7 @@ std::vector<coord> VoxelGrid::AStart(
             }
             else if (diagonal_move && dy == -1)
             {
-                const int front_head_idx = getIndex(
+                const int front_head_idx = indexOf(
                     neighbor_pos[0],
                     current.position[1] + 1,
                     neighbor_pos[2]);
@@ -269,7 +300,7 @@ std::vector<coord> VoxelGrid::AStart(
                 int scan_y = neighbor_pos[1] - 1;
                 while (scan_y >= _min_pos[1])
                 {
-                    int scan_floor_idx = getIndex(
+                    int scan_floor_idx = indexOf(
                         neighbor_pos[0], scan_y, neighbor_pos[2]);
                     if (scan_floor_idx == -1)
                         break;
@@ -288,11 +319,11 @@ std::vector<coord> VoxelGrid::AStart(
 
                 neighbor_pos[1] -= drop_distance;
 
-                neighbor_head_idx = getIndex(
+                neighbor_head_idx = indexOf(
                     neighbor_pos[0], neighbor_pos[1] + 1, neighbor_pos[2]);
-                neighbor_foot_idx = getIndex(
+                neighbor_foot_idx = indexOf(
                     neighbor_pos[0], neighbor_pos[1], neighbor_pos[2]);
-                neighbor_floor_idx = getIndex(
+                neighbor_floor_idx = indexOf(
                     neighbor_pos[0], neighbor_pos[1] - 1, neighbor_pos[2]);
 
                 if (neighbor_foot_idx == -1 ||
@@ -307,47 +338,47 @@ std::vector<coord> VoxelGrid::AStart(
                     continue;
             }
 
-            const int neighborIndex = getIndex(
+            const int neighborIndex = indexOf(
                 neighbor_pos[0], neighbor_pos[1], neighbor_pos[2]);
             if (neighborIndex == -1 || closed[neighborIndex])
                 continue;
 
             // Determine base movement cost
-            double move_cost = COST_AIR;
+            int move_cost = static_cast<int>(COST_AIR);
             const int target_block_id = _voxel_grid[neighbor_foot_idx];
 
             if (target_block_id == BLOCK_AIR ||
                 target_block_id == BLOCK_AIR_NO_BRIDGE)
             {
-                move_cost = COST_AIR;
+                move_cost = static_cast<int>(COST_AIR);
             }
             else if (target_block_id == BLOCK_SOLID)
             {
-                move_cost = COST_SOLID;
+                move_cost = static_cast<int>(COST_SOLID);
             }
             else if (target_block_id == BLOCK_MAGMA)
             {
-                move_cost = COST_MAGMA;
+                move_cost = static_cast<int>(COST_MAGMA);
             }
 
             // Vertical cost
             if (dy == 1)
             {
-                move_cost += 5.0;
+                move_cost += 5;
             }
             else if (dy == -1 && (dx != 0 || dz != 0))
             {
-                move_cost += 5.0;
+                move_cost += 5;
             }
 
-            const double tentative_g = current.g + move_cost;
+            const int tentative_g = current.g + move_cost;
             if (tentative_g >= best_g[neighborIndex])
                 continue;
 
             best_g[neighborIndex] = tentative_g;
             parent[neighborIndex] = currentIndex;
 
-            const double h = aStarHeuristic(neighbor_pos, end_pos);
+            const int h = aStarHeuristic(neighbor_pos, end_pos);
             open_list.push({tentative_g + h, tentative_g, neighbor_pos});
         }
     }
@@ -360,7 +391,7 @@ std::vector<coord> VoxelGrid::AStart(
         result.nodesExpanded = nodes_expanded;
         result.peakFrontierSize = peak_frontier_size;
         result.estimatedMemoryBytes =
-            best_g.size() * sizeof(double) +
+            best_g.size() * sizeof(int) +
             parent.size() * sizeof(int) +
             closed.size() * sizeof(unsigned char);
         result.runtimeMs = std::chrono::duration<double, std::milli>(

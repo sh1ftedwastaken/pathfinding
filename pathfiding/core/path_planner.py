@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import sys
 import threading
 import time
@@ -31,8 +30,8 @@ GREEN_GLASS_BLOCK = "minecraft:green_stained_glass"
 YELLOW_GLASS_BLOCK = "minecraft:yellow_stained_glass"
 RED_GLASS_BLOCK = "minecraft:red_stained_glass"
 AIR_BLOCK = "minecraft:air"
-GREEN_GLASS_RETAIN = 8
-YELLOW_GLASS_RETAIN = 6
+GREEN_GLASS_RETAIN = 4
+YELLOW_GLASS_RETAIN = 2
 COMMAND_FLUSH_INTERVAL = 128
 
 
@@ -67,7 +66,7 @@ def _in_bounds(position:Coord, min_pos:Coord, max_pos:Coord) -> bool:
     )
 
 
-def format_coord(position: Coord) -> str:
+def format_coord(position:Coord) -> str:
     return f"({position[0]}, {position[1]}, {position[2]})"
 
 
@@ -112,7 +111,9 @@ def find_path(
 
     if not target:
         if not cluster_center:
-            raise PathfindingError(f"No {ore} cluster found in the extraction radius")
+            raise PathfindingError(
+                f"No reachable {ore} cluster found in the extraction radius"
+            )
         end = _as_coord(cluster_center)
         m.echo(
             f"{m_extra.txt_clr('g')}Using best {ore} cluster center: "
@@ -163,13 +164,13 @@ def find_path(
 # Minecraft CLI for Path Generation 
 # ------------------------------------------------------------------
 
-def _body_cells(feet: Coord) -> tuple[Coord, Coord]:
-    """Return the feet and head cells for a player standing at ``feet``."""
+def _body_cells(feet:Coord) -> tuple[Coord, Coord]:
+    """Return the feet and head cells for a player standing at feet."""
     x, y, z = feet
     return ((x, y, z), (x, y + 1, z))
 
 
-def _transition_cells(previous: Coord, current: Coord):
+def _transition_cells(previous:Coord, current:Coord):
     """Yield body cells occupied while moving or dropping between nodes."""
     px, py, pz = previous
     cx, cy, cz = current
@@ -177,8 +178,7 @@ def _transition_cells(previous: Coord, current: Coord):
 
     if cy < py:
         # Enter the destination column at the old height, then fill every
-        # body cell down to the landing height. This handles diagonal drops,
-        # straight drops, and jumps down a ledge.
+        # body cell down to the landing height.
         start_y = py if horizontal else py - 1
         for y in range(start_y, cy - 1, -1):
             yield from _body_cells((cx, y, cz))
@@ -188,12 +188,11 @@ def _transition_cells(previous: Coord, current: Coord):
         yield (px, py + 2, pz)
 
 
-def _set_block(cell: Coord, block: str) -> str:
+def _set_block(cell:Coord, block:str) -> str:
     x, y, z = cell
     return f"setblock {x} {y} {z} {block} replace"
 
-
-def iter_glass_cells(path: tuple[Coord, ...]):
+def iter_glass_cells(path:tuple[Coord, ...]):
     seen: set[Coord] = set()
 
     for index, feet in enumerate(path):
@@ -211,14 +210,13 @@ def iter_glass_cells(path: tuple[Coord, ...]):
             yield cell
 
 
-def iter_glass_commands(path: tuple[Coord, ...]):
+def iter_glass_commands(path:tuple[Coord, ...]):
     """Yield the animated green/yellow/red glass trail commands."""
-    green: deque[Coord] = deque()
-    yellow: deque[Coord] = deque()
-    red: Coord | None = None
+    green:deque[Coord] = deque()
+    yellow:deque[Coord] = deque()
+    red:Coord | None = None
 
     for cell in iter_glass_cells(path):
-        # The previous red cell only survives for one generation step.
         if red is not None:
             yield _set_block(red, AIR_BLOCK)
             red = None
@@ -236,9 +234,7 @@ def iter_glass_commands(path: tuple[Coord, ...]):
             yield _set_block(red_cell, RED_GLASS_BLOCK)
             red = red_cell
 
-    # Continue the same colour wave after the last path cell until every
-    # remaining glass cell has been replaced with air. One air command is
-    # emitted per cell, so the trail shrinks gradually instead of all at once.
+    # Finish with ramining blocks
     while red is not None or green or yellow:
         if red is not None:
             yield _set_block(red, AIR_BLOCK)
@@ -256,9 +252,9 @@ def iter_glass_commands(path: tuple[Coord, ...]):
 
 def build_glass_path(
     path:tuple[Coord, ...],
-    wait_seconds: float = 0.0,
+    wait_seconds:float = 0.0,
     *,
-    stop_event: threading.Event | None = None,
+    stop_event:threading.Event | None = None,
 ) -> int:
     """Build the path in-game, returning the number of commands."""
     if wait_seconds < 0:

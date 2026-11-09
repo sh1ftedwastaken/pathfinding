@@ -1,5 +1,6 @@
 #include <array>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <vector>
 #include <unordered_set>
@@ -10,7 +11,7 @@ struct Cluster
 {
     coord center;
     int size;
-    long long distance;
+    double path_cost;
 };
 
 long long manhattanDistance(const coord& a, const coord& b)
@@ -205,48 +206,43 @@ std::optional<coord> VoxelGrid::extractPreProcessVoxel()
             static_cast<int>(std::floor(static_cast<double>(sum_z) / size))
         };
 
-        clusters.push_back({
-            center,
-            size,
-            manhattanDistance(center, _initial_pos)
-        });
+        clusters.push_back({center, size, 0.0});
     }
+
+    std::vector<coord> centers;
+    centers.reserve(clusters.size());
+    for (const Cluster& cluster : clusters)
+        centers.push_back(cluster.center);
+
+    const std::vector<double> path_costs = DijkstraCosts(_initial_pos, centers);
+    for (std::size_t index = 0; index < clusters.size(); ++index)
+        clusters[index].path_cost = path_costs[index];
 
     const Cluster* best_cluster = nullptr;
-    double best_cluster_score = 0.0;
+    double best_score = -std::numeric_limits<double>::infinity();
 
-    // Check for cluster close to player
     for (const Cluster& cluster : clusters)
     {
-        if (cluster.distance > CLUSTER_CLOSE_TO_PLAYER)
+        if (!std::isfinite(cluster.path_cost))
             continue;
 
-        double score =
-            CLUSTER_DISTANCE_SCORE * static_cast<double>(cluster.distance) -
-            CLUSTER_SIZE_SCORE * static_cast<double>(cluster.size);
+        const double score = cluster.path_cost <= 0.0
+            ? std::numeric_limits<double>::infinity()
+            : static_cast<double>(cluster.size) / cluster.path_cost;
 
-        if (best_cluster == nullptr || score <= best_cluster_score)
+        if (best_cluster == nullptr ||
+            score > best_score ||
+            (score == best_score && cluster.size > best_cluster->size) ||
+            (score == best_score && cluster.size == best_cluster->size &&
+             cluster.center < best_cluster->center))
         {
             best_cluster = &cluster;
-            best_cluster_score = score;
+            best_score = score;
         }
     }
 
-    if (best_cluster != nullptr)
-        return best_cluster->center;
-
-    // None of the cluster is close to player
-    // Check for far clusters and return center of best one
-    best_cluster = &clusters.front();
-    for (const Cluster& cluster : clusters)
-    {
-        if (cluster.size > best_cluster->size ||
-            (cluster.size == best_cluster->size &&
-             cluster.distance < best_cluster->distance))
-        {
-            best_cluster = &cluster;
-        }
-    }
+    if (best_cluster == nullptr)
+        return std::nullopt;
 
     return best_cluster->center;
 }

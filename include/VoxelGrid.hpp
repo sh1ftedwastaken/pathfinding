@@ -19,10 +19,6 @@ constexpr double COST_AIR    = 1.0;
 constexpr double COST_SOLID  = 15.0;
 constexpr double COST_MAGMA  = 30.0;
 
-constexpr int    CLUSTER_CLOSE_TO_PLAYER = 10;
-constexpr double CLUSTER_DISTANCE_SCORE  = 1.5;
-constexpr double CLUSTER_SIZE_SCORE      = 2.3;
-
 
 using coord = std::array<int, 3>;
 
@@ -57,8 +53,18 @@ public:
     int getIndex(const int& x, const int& y, const int& z);
     std::optional<coord> extractPreProcessVoxel();
 
-    std::vector<coord> AStart(const coord& start_pos, const coord& end_pos);
-    std::vector<coord> Dijkstra(const coord& start_pos, const coord& end_pos);
+    // Cost from start pos to all clusters found
+    std::vector<double> DijkstraCosts(
+        const coord& start_pos, const std::vector<coord>& targets
+    );
+
+    // Pathfinding form start to end
+    std::vector<coord> AStart(
+        const coord& start_pos, const coord& end_pos
+    );
+    std::vector<coord> Dijkstra(
+        const coord& start_pos, const coord& end_pos
+    );
 };
 
 long long manhattanDistance(const coord& a, const coord& b);

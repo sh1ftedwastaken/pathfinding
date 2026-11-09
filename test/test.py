@@ -13,7 +13,6 @@ Output is intentionally plain text prefixed with ``[ore-test]``.
 from __future__ import annotations
 
 import math
-import re
 import sys
 import time
 import traceback
@@ -48,53 +47,16 @@ MAX_RADIUS = 48
 MAX_CANDIDATES_TO_PRINT = 20
 MAX_PATH_CELLS = 300_000
 
-DEFAULT_NEAR = 10
-DEFAULT_DISTANCE_SCORE = 1.5
-DEFAULT_SIZE_SCORE = 2.3
-
-
 @dataclass(frozen=True)
 class Candidate:
     center: tuple[int, int, int]
     size: int
-    distance: int
+    path_cost: float
     score: float
 
 
 def _echo(text: str) -> None:
     m.echo(f"[ore-test] {text}")
-
-
-def _read_header_constants() -> tuple[int, float, float]:
-    header = _PROJECT_ROOT / "include" / "VoxelGrid.hpp"
-    values: dict[str, float] = {
-        "CLUSTER_CLOSE_TO_PLAYER": DEFAULT_NEAR,
-        "CLUSTER_DISTANCE_SCORE": DEFAULT_DISTANCE_SCORE,
-        "CLUSTER_SIZE_SCORE": DEFAULT_SIZE_SCORE,
-    }
-
-    try:
-        text = header.read_text(encoding="utf-8")
-    except OSError:
-        return (
-            int(values["CLUSTER_CLOSE_TO_PLAYER"]),
-            values["CLUSTER_DISTANCE_SCORE"],
-            values["CLUSTER_SIZE_SCORE"],
-        )
-
-    for name in values:
-        match = re.search(
-            rf"\b{name}\s*=\s*([0-9]+(?:\.[0-9]+)?)",
-            text,
-        )
-        if match:
-            values[name] = float(match.group(1))
-
-    return (
-        int(values["CLUSTER_CLOSE_TO_PLAYER"]),
-        values["CLUSTER_DISTANCE_SCORE"],
-        values["CLUSTER_SIZE_SCORE"],
-    )
 
 
 def _build_grid(ore: str, dimension: str) -> voxelGrid | None:
@@ -158,9 +120,6 @@ def _buffer_counts(buffer: array) -> str:
 def _find_candidates(
     buffer: array,
     grid: voxelGrid,
-    near_cutoff: int,
-    distance_score: float,
-    size_score: float,
 ) -> list[Candidate]:
     min_x, min_y, min_z = grid.min_pos
     max_x, max_y, max_z = grid.max_pos
@@ -217,53 +176,57 @@ def _find_candidates(
                     int(math.floor(sum_y / size)),
                     int(math.floor(sum_z / size)),
                 )
-                distance = sum(
-                    abs(center[index] - grid.initial_pos[index])
-                    for index in range(3)
-                )
-                score = (
-                    distance_score * distance
-                    - size_score * size
-                )
                 candidates.append(
                     Candidate(
                         center=center,
                         size=size,
-                        distance=distance,
-                        score=score,
+                        path_cost=math.inf,
+                        score=-math.inf,
                     )
                 )
 
     return candidates
 
 
-def _select_candidate(
+def _score_candidates(
     candidates: list[Candidate],
-    near_cutoff: int,
-) -> tuple[Candidate | None, str]:
-    near = [candidate for candidate in candidates if candidate.distance <= near_cutoff]
+    path_costs: list[float],
+) -> list[Candidate]:
+    scored: list[Candidate] = []
 
-    if near:
-        best = near[0]
-        for candidate in near[1:]:
-            if candidate.score <= best.score:
-                best = candidate
-        return best, "near"
+    for candidate, path_cost in zip(candidates, path_costs):
+        if path_cost == 0:
+            score = math.inf
+        elif math.isfinite(path_cost):
+            score = candidate.size / path_cost
+        else:
+            score = -math.inf
 
-    if not candidates:
-        return None, "none"
-
-    best = candidates[0]
-    for candidate in candidates[1:]:
-        if (
-            candidate.size > best.size
-            or (
-                candidate.size == best.size
-                and candidate.distance < best.distance
+        scored.append(
+            Candidate(
+                center=candidate.center,
+                size=candidate.size,
+                path_cost=path_cost,
+                score=score,
             )
-        ):
-            best = candidate
-    return best, "far"
+        )
+
+    return scored
+
+
+def _select_candidate(candidates: list[Candidate]) -> Candidate | None:
+    reachable = [candidate for candidate in candidates if math.isfinite(candidate.path_cost)]
+    if not reachable:
+        return None
+
+    return max(
+        reachable,
+        key=lambda candidate: (
+            candidate.score,
+            candidate.size,
+            tuple(-value for value in candidate.center),
+        ),
+    )
 
 
 def _short_center(center: tuple[int, int, int]) -> str:
@@ -274,10 +237,14 @@ def _print_candidates(
     label: str,
     candidates: list[Candidate],
     selected: Candidate | None,
-    near_cutoff: int,
 ) -> None:
-    near_count = sum(1 for candidate in candidates if candidate.distance <= near_cutoff)
-    _echo(f"candidates_{label} total={len(candidates)} near={near_count}")
+    reachable_count = sum(
+        1 for candidate in candidates if math.isfinite(candidate.path_cost)
+    )
+    _echo(
+        f"candidates_{label} total={len(candidates)} "
+        f"reachable={reachable_count}"
+    )
 
     if not candidates:
         _echo(f"candidates_{label} none")
@@ -287,21 +254,23 @@ def _print_candidates(
     if len(to_print) > MAX_CANDIDATES_TO_PRINT:
         to_print = sorted(
             candidates,
-            key=lambda candidate: (-candidate.size, candidate.distance),
+            key=lambda candidate: (
+                -candidate.score,
+                -candidate.size,
+                candidate.center,
+            ),
         )[:MAX_CANDIDATES_TO_PRINT]
         if selected is not None and selected not in to_print:
             to_print = [selected, *to_print]
 
     for index, candidate in enumerate(to_print):
-        zone = "near" if candidate.distance <= near_cutoff else "far"
         is_selected = candidate is selected
         _echo(
             f"candidates_{label} #{index} "
             f"center={_short_center(candidate.center)} "
             f"size={candidate.size} "
-            f"dist={candidate.distance} "
+            f"cost={candidate.path_cost:.3f} "
             f"score={candidate.score:.3f} "
-            f"zone={zone} "
             f"selected={'YES' if is_selected else 'no'}"
         )
 
@@ -379,7 +348,6 @@ def _extension_status() -> str:
 
 
 def run() -> None:
-    near_cutoff, distance_score, size_score = _read_header_constants()
     dimension = DIMENSIONS.get(m.world_info().dimension, "unknown")
     raw_player_position = m.player().position
     player_position: tuple[int, int, int] = (
@@ -391,10 +359,6 @@ def run() -> None:
     _echo(f"project={_PROJECT_ROOT}")
     _echo(f"python={sys.version.split()[0]}")
     _echo(f"dimension={dimension} player={player_position}")
-    _echo(
-        f"header_constants near={near_cutoff} "
-        f"distance={distance_score} size={size_score}"
-    )
     _echo(f"ore={ORE} extraction_max_radius={MAX_RADIUS}")
 
     grid = _build_grid(ORE, dimension)
@@ -455,23 +419,29 @@ def run() -> None:
     _echo(f"extract_voxel_grid elapsed={elapsed:.3f}s")
     _echo(f"buffer_before {_buffer_counts(before)}")
 
-    pre_candidates = _find_candidates(
+    pre_grid = pathfinding.VoxelGrid(
         before,
-        grid,
-        near_cutoff,
-        distance_score,
-        size_score,
+        (grid.initial_pos, grid.min_pos, grid.max_pos),
     )
-    pre_selected, pre_zone = _select_candidate(pre_candidates, near_cutoff)
-    _print_candidates("pre", pre_candidates, pre_selected, near_cutoff)
+    pre_raw = _find_candidates(before, grid)
+    pre_candidates = _score_candidates(
+        pre_raw,
+        pre_grid.DijkstraCosts(
+            grid.initial_pos,
+            [candidate.center for candidate in pre_raw],
+        ),
+    )
+    pre_selected = _select_candidate(pre_candidates)
+    _print_candidates("pre", pre_candidates, pre_selected)
 
     if pre_selected is None:
         _echo("mirror_pre_selected=none")
     else:
         _echo(
             f"mirror_pre_selected={_short_center(pre_selected.center)} "
-            f"zone={pre_zone} size={pre_selected.size} "
-            f"dist={pre_selected.distance} score={pre_selected.score:.3f}"
+            f"size={pre_selected.size} "
+            f"cost={pre_selected.path_cost:.3f} "
+            f"score={pre_selected.score:.3f}"
         )
 
     # The Python voxelGrid only builds the buffer.  Clustering lives on the
@@ -516,23 +486,25 @@ def run() -> None:
             f"{'YES' if cpp_center == pre_selected.center else 'NO'}"
         )
 
-    post_candidates = _find_candidates(
-        grid.voxel_buffer,
-        grid,
-        near_cutoff,
-        distance_score,
-        size_score,
+    post_raw = _find_candidates(grid.voxel_buffer, grid)
+    post_candidates = _score_candidates(
+        post_raw,
+        cpp_grid.DijkstraCosts(
+            grid.initial_pos,
+            [candidate.center for candidate in post_raw],
+        ),
     )
-    post_selected, post_zone = _select_candidate(post_candidates, near_cutoff)
-    _print_candidates("post", post_candidates, post_selected, near_cutoff)
+    post_selected = _select_candidate(post_candidates)
+    _print_candidates("post", post_candidates, post_selected)
 
     if post_selected is None:
         _echo("mirror_post_selected=none")
     else:
         _echo(
             f"mirror_post_selected={_short_center(post_selected.center)} "
-            f"zone={post_zone} size={post_selected.size} "
-            f"dist={post_selected.distance} score={post_selected.score:.3f}"
+            f"size={post_selected.size} "
+            f"cost={post_selected.path_cost:.3f} "
+            f"score={post_selected.score:.3f}"
         )
         _echo(
             f"mirror_match_post="

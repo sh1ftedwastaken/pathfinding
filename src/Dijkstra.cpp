@@ -6,6 +6,7 @@
 #include <chrono>
 #include <limits>
 #include <queue>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -21,6 +22,19 @@ struct CompareQueueNode {
         // lowest-cost position is processed first.
         return a.cost > b.cost;
     }
+};
+
+struct DijkstraRun {
+    std::vector<double> distance;
+    std::vector<int> parent;
+    std::vector<unsigned char> visited;
+    std::vector<double> targetCosts;
+
+    std::size_t nodesExpanded = 0;
+    std::size_t peakFrontierSize = 0;
+    std::size_t estimatedMemoryBytes = 0;
+
+    bool found = false;
 };
 
 thread_local PathResult g_lastDijkstraResult;
@@ -45,6 +59,278 @@ double baseMovementCost(const int blockId) {
     return COST_AIR;
 }
 
+DijkstraRun runDijkstra(
+    int* voxelGrid,
+    const int xLength,
+    const int yLength,
+    const int zLength,
+    const coord& minPos,
+    const coord& startPos,
+    const std::vector<coord>& targets,
+    const bool needParents
+) {
+    DijkstraRun run;
+    const double INF = std::numeric_limits<double>::infinity();
+
+    const int cellCount = xLength * yLength * zLength;
+    auto indexOf = [&](const int x, const int y, const int z) -> int {
+        const int xIndex = x - minPos[0];
+        const int yIndex = y - minPos[1];
+        const int zIndex = z - minPos[2];
+
+        if (xIndex < 0 || xIndex >= xLength ||
+            yIndex < 0 || yIndex >= yLength ||
+            zIndex < 0 || zIndex >= zLength) {
+            return -1;
+        }
+
+        return xIndex + zIndex * xLength +
+               yIndex * xLength * zLength;
+    };
+
+    run.targetCosts.assign(targets.size(), INF);
+    if (targets.empty()) {
+        return run;
+    }
+
+    const int startIndex = indexOf(startPos[0], startPos[1], startPos[2]);
+    if (startIndex == -1) {
+        return run;
+    }
+
+    std::unordered_map<int, std::vector<std::size_t>> targetSlots;
+    std::size_t remainingTargets = 0;
+
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+        const coord& target = targets[index];
+        const int targetIndex = indexOf(target[0], target[1], target[2]);
+        if (targetIndex == -1) {
+            continue;
+        }
+
+        targetSlots[targetIndex].push_back(index);
+        ++remainingTargets;
+    }
+
+    if (remainingTargets == 0) {
+        return run;
+    }
+
+    run.distance.assign(cellCount, INF);
+    run.visited.assign(cellCount, 0);
+    if (needParents) {
+        run.parent.assign(cellCount, -1);
+    }
+
+    std::priority_queue<
+        QueueNode,
+        std::vector<QueueNode>,
+        CompareQueueNode
+    > frontier;
+
+    run.distance[startIndex] = 0.0;
+    frontier.push({0.0, startPos});
+
+    const MovementRules rules{};
+
+    while (!frontier.empty()) {
+        if (frontier.size() > run.peakFrontierSize) {
+            run.peakFrontierSize = frontier.size();
+        }
+
+        const QueueNode top = frontier.top();
+        frontier.pop();
+
+        const coord currentPos = top.position;
+        const int currentIndex = indexOf(
+            currentPos[0], currentPos[1], currentPos[2]
+        );
+
+        if (currentIndex == -1 || run.visited[currentIndex]) {
+            continue;
+        }
+
+        run.visited[currentIndex] = 1;
+        run.nodesExpanded++;
+
+        const auto targetIt = targetSlots.find(currentIndex);
+        if (targetIt != targetSlots.end()) {
+            for (const std::size_t slot : targetIt->second) {
+                run.targetCosts[slot] = run.distance[currentIndex];
+            }
+
+            remainingTargets -= targetIt->second.size();
+            if (remainingTargets == 0) {
+                run.found = true;
+                break;
+            }
+        }
+
+        for (std::size_t moveIndex = 0;
+             moveIndex < activeMoveCount(rules);
+             ++moveIndex) {
+
+            const Position& move = kMoveOffsets[moveIndex];
+            const int dx = move[0];
+            const int dy = move[1];
+            const int dz = move[2];
+
+            coord neighborPos = {
+                currentPos[0] + dx,
+                currentPos[1] + dy,
+                currentPos[2] + dz
+            };
+
+            int neighborHeadIndex = indexOf(
+                neighborPos[0], neighborPos[1] + 1, neighborPos[2]
+            );
+            int neighborFootIndex = indexOf(
+                neighborPos[0], neighborPos[1], neighborPos[2]
+            );
+            int neighborFloorIndex = indexOf(
+                neighborPos[0], neighborPos[1] - 1, neighborPos[2]
+            );
+
+            // A player position needs a valid feet, head, and floor cell.
+            if (neighborHeadIndex == -1 ||
+                neighborFootIndex == -1 ||
+                neighborFloorIndex == -1) {
+                continue;
+            }
+
+            if (isBlocked(voxelGrid[neighborFootIndex]) ||
+                isBlocked(voxelGrid[neighborHeadIndex])) {
+                continue;
+            }
+
+            // check the extra block swept by a vertical diagonal.
+            const bool diagonalMove = dx != 0 || dz != 0;
+            if (diagonalMove && dy == 1) {
+                const int aboveHeadIndex = indexOf(
+                    currentPos[0], currentPos[1] + 2, currentPos[2]
+                );
+                if (aboveHeadIndex == -1 ||
+                    isBlocked(voxelGrid[aboveHeadIndex])) {
+                    continue;
+                }
+            }
+            else if (diagonalMove && dy == -1) {
+                const int frontHeadIndex = indexOf(
+                    neighborPos[0], currentPos[1] + 1, neighborPos[2]
+                );
+                if (frontHeadIndex == -1 ||
+                    isBlocked(voxelGrid[frontHeadIndex])) {
+                    continue;
+                }
+            }
+
+            if (voxelGrid[neighborFloorIndex] == BLOCK_WATER ||
+                voxelGrid[neighborFloorIndex] == BLOCK_LAVA) {
+                continue;
+            }
+
+            // If the neighboring position steps over air, scan downward
+            // to find the landing position. This mirrors A*'s drop rule.
+            int dropDistance = 0;
+            if (voxelGrid[neighborFloorIndex] == BLOCK_AIR ||
+                voxelGrid[neighborFloorIndex] == BLOCK_AIR_NO_BRIDGE) {
+
+                int scanY = neighborPos[1] - 1;
+
+                while (scanY >= minPos[1]) {
+                    const int scanFloorIndex = indexOf(
+                        neighborPos[0], scanY, neighborPos[2]
+                    );
+
+                    if (scanFloorIndex == -1) {
+                        break;
+                    }
+
+                    const int blockId = voxelGrid[scanFloorIndex];
+                    if (blockId != BLOCK_AIR &&
+                        blockId != BLOCK_AIR_NO_BRIDGE) {
+                        break;
+                    }
+
+                    dropDistance++;
+                    scanY--;
+                }
+
+                if (dropDistance > 3) {
+                    continue;
+                }
+
+                neighborPos[1] -= dropDistance;
+
+                neighborHeadIndex = indexOf(
+                    neighborPos[0], neighborPos[1] + 1, neighborPos[2]
+                );
+                neighborFootIndex = indexOf(
+                    neighborPos[0], neighborPos[1], neighborPos[2]
+                );
+                neighborFloorIndex = indexOf(
+                    neighborPos[0], neighborPos[1] - 1, neighborPos[2]
+                );
+
+                if (neighborHeadIndex == -1 ||
+                    neighborFootIndex == -1 ||
+                    neighborFloorIndex == -1) {
+                    continue;
+                }
+
+                if (isBlocked(voxelGrid[neighborFootIndex]) ||
+                    isBlocked(voxelGrid[neighborHeadIndex])) {
+                    continue;
+                }
+
+                if (voxelGrid[neighborFloorIndex] == BLOCK_WATER ||
+                    voxelGrid[neighborFloorIndex] == BLOCK_LAVA) {
+                    continue;
+                }
+            }
+
+            const int neighborIndex = indexOf(
+                neighborPos[0], neighborPos[1], neighborPos[2]
+            );
+
+            if (neighborIndex == -1 || run.visited[neighborIndex]) {
+                continue;
+            }
+
+            double moveCost = baseMovementCost(
+                voxelGrid[neighborFootIndex]
+            );
+
+            // Match the vertical movement penalties currently used by A*.
+            if (dy == 1) {
+                moveCost += 5.0;
+            }
+            else if (dy == -1 && (dx != 0 || dz != 0)) {
+                moveCost += 5.0;
+            }
+
+            const double newCost = run.distance[currentIndex] + moveCost;
+
+            // Dijkstra relaxation step.
+            if (newCost < run.distance[neighborIndex]) {
+                run.distance[neighborIndex] = newCost;
+                if (needParents) {
+                    run.parent[neighborIndex] = currentIndex;
+                }
+                frontier.push({newCost, neighborPos});
+            }
+        }
+    }
+
+    run.estimatedMemoryBytes =
+        run.distance.size() * sizeof(double) +
+        (needParents ? run.parent.size() * sizeof(int) : 0) +
+        run.visited.size() * sizeof(unsigned char) +
+        run.peakFrontierSize * sizeof(QueueNode);
+
+    return run;
+}
+
 } // namespace
 
 const PathResult& getLastDijkstraResult() {
@@ -67,207 +353,27 @@ std::vector<coord> VoxelGrid::Dijkstra(
         return completed.path;
     };
 
-    const int startIndex = getIndex(start_pos[0], start_pos[1], start_pos[2]);
-    const int goalIndex  = getIndex(end_pos[0], end_pos[1], end_pos[2]);
+    const DijkstraRun run = runDijkstra(
+        _voxel_grid,
+        _x_length,
+        _y_length,
+        _z_length,
+        _min_pos,
+        start_pos,
+        {end_pos},
+        true
+    );
 
-    if (startIndex == -1 || goalIndex == -1) {
-        return finish(result);
-    }
+    result.nodesExpanded = run.nodesExpanded;
+    result.peakFrontierSize = run.peakFrontierSize;
+    result.estimatedMemoryBytes = run.estimatedMemoryBytes;
+    result.found = run.found;
 
-    const int cellCount = _x_length * _y_length * _z_length;
-    const double INF = std::numeric_limits<double>::infinity();
-
-    std::vector<double> distance(cellCount, INF);
-    std::vector<int> parent(cellCount, -1);
-    std::vector<unsigned char> visited(cellCount, 0);
-
-    std::priority_queue<
-        QueueNode,
-        std::vector<QueueNode>,
-        CompareQueueNode
-    > frontier;
-
-    distance[startIndex] = 0.0;
-    frontier.push({0.0, start_pos});
-
-    const MovementRules rules{};
-
-    while (!frontier.empty()) {
-        if (frontier.size() > result.peakFrontierSize) {
-            result.peakFrontierSize = frontier.size();
-        }
-
-        const QueueNode top = frontier.top();
-        frontier.pop();
-
-        const coord currentPos = top.position;
-        const int currentIndex = getIndex(
-            currentPos[0], currentPos[1], currentPos[2]
+    if (run.found) {
+        const int startIndex = getIndex(
+            start_pos[0], start_pos[1], start_pos[2]
         );
-
-        if (currentIndex == -1 || visited[currentIndex]) {
-            continue;
-        }
-
-        visited[currentIndex] = 1;
-        result.nodesExpanded++;
-
-        if (currentIndex == goalIndex) {
-            result.found = true;
-            break;
-        }
-
-        for (std::size_t moveIndex = 0;
-             moveIndex < activeMoveCount(rules);
-             ++moveIndex) {
-
-            const Position& move = kMoveOffsets[moveIndex];
-            const int dx = move[0];
-            const int dy = move[1];
-            const int dz = move[2];
-
-            coord neighborPos = {
-                currentPos[0] + dx,
-                currentPos[1] + dy,
-                currentPos[2] + dz
-            };
-
-            int neighborHeadIndex = getIndex(
-                neighborPos[0], neighborPos[1] + 1, neighborPos[2]
-            );
-            int neighborFootIndex = getIndex(
-                neighborPos[0], neighborPos[1], neighborPos[2]
-            );
-            int neighborFloorIndex = getIndex(
-                neighborPos[0], neighborPos[1] - 1, neighborPos[2]
-            );
-
-            // A player position needs a valid feet, head, and floor cell.
-            if (neighborHeadIndex == -1 ||
-                neighborFootIndex == -1 ||
-                neighborFloorIndex == -1) {
-                continue;
-            }
-
-            if (isBlocked(_voxel_grid[neighborFootIndex]) ||
-                isBlocked(_voxel_grid[neighborHeadIndex])) {
-                continue;
-            }
-
-            // check the extra block swept by a vertical diagonal.
-            const bool diagonalMove = dx != 0 || dz != 0;
-            if (diagonalMove && dy == 1) {
-                const int aboveHeadIndex = getIndex(
-                    currentPos[0], currentPos[1] + 2, currentPos[2]
-                );
-                if (aboveHeadIndex == -1 ||
-                    isBlocked(_voxel_grid[aboveHeadIndex])) {
-                    continue;
-                }
-            }
-            else if (diagonalMove && dy == -1) {
-                const int frontHeadIndex = getIndex(
-                    neighborPos[0], currentPos[1] + 1, neighborPos[2]
-                );
-                if (frontHeadIndex == -1 ||
-                    isBlocked(_voxel_grid[frontHeadIndex])) {
-                    continue;
-                }
-            }
-
-            // If the neighboring position steps over air, scan downward
-            // to find the landing position. This mirrors A*'s drop rule.
-            int dropDistance = 0;
-            if (_voxel_grid[neighborFloorIndex] == BLOCK_AIR ||
-                _voxel_grid[neighborFloorIndex] == BLOCK_AIR_NO_BRIDGE) {
-
-                int scanY = neighborPos[1] - 1;
-
-                while (scanY >= _min_pos[1]) {
-                    const int scanFloorIndex = getIndex(
-                        neighborPos[0], scanY, neighborPos[2]
-                    );
-
-                    if (scanFloorIndex == -1) {
-                        break;
-                    }
-
-                    const int blockId = _voxel_grid[scanFloorIndex];
-                    if (blockId != BLOCK_AIR &&
-                        blockId != BLOCK_AIR_NO_BRIDGE) {
-                        break;
-                    }
-
-                    dropDistance++;
-                    scanY--;
-                }
-
-                if (dropDistance > 3) {
-                    continue;
-                }
-
-                neighborPos[1] -= dropDistance;
-
-                neighborHeadIndex = getIndex(
-                    neighborPos[0], neighborPos[1] + 1, neighborPos[2]
-                );
-                neighborFootIndex = getIndex(
-                    neighborPos[0], neighborPos[1], neighborPos[2]
-                );
-                neighborFloorIndex = getIndex(
-                    neighborPos[0], neighborPos[1] - 1, neighborPos[2]
-                );
-
-                if (neighborHeadIndex == -1 ||
-                    neighborFootIndex == -1 ||
-                    neighborFloorIndex == -1) {
-                    continue;
-                }
-
-                if (isBlocked(_voxel_grid[neighborFootIndex]) ||
-                    isBlocked(_voxel_grid[neighborHeadIndex])) {
-                    continue;
-                }
-
-                if (_voxel_grid[neighborFloorIndex] == BLOCK_WATER ||
-                    _voxel_grid[neighborFloorIndex] == BLOCK_LAVA) {
-                    continue;
-                }
-            }
-
-            const int neighborIndex = getIndex(
-                neighborPos[0], neighborPos[1], neighborPos[2]
-            );
-
-            if (neighborIndex == -1 || visited[neighborIndex]) {
-                continue;
-            }
-
-            double moveCost = baseMovementCost(
-                _voxel_grid[neighborFootIndex]
-            );
-
-            // Match the vertical movement penalties currently used by A*.
-            if (dy == 1) {
-                moveCost += 5.0;
-            }
-            else if (dy == -1 && (dx != 0 || dz != 0)) {
-                moveCost += 5.0;
-            }
-
-            const double newCost = distance[currentIndex] + moveCost;
-
-            // Dijkstra relaxation step.
-            if (newCost < distance[neighborIndex]) {
-                distance[neighborIndex] = newCost;
-                parent[neighborIndex] = currentIndex;
-                frontier.push({newCost, neighborPos});
-            }
-        }
-    }
-
-    if (result.found) {
-        int currentIndex = goalIndex;
+        int currentIndex = getIndex(end_pos[0], end_pos[1], end_pos[2]);
 
         while (currentIndex != -1) {
             const int yIndex = currentIndex / (_x_length * _z_length);
@@ -285,7 +391,7 @@ std::vector<coord> VoxelGrid::Dijkstra(
                 break;
             }
 
-            currentIndex = parent[currentIndex];
+            currentIndex = run.parent[currentIndex];
         }
 
         // If the parent chain did not actually reach the start,
@@ -297,15 +403,27 @@ std::vector<coord> VoxelGrid::Dijkstra(
         }
         else {
             std::reverse(result.path.begin(), result.path.end());
-            result.pathCost = distance[goalIndex];
+            result.pathCost = run.targetCosts.front();
         }
     }
 
-    result.estimatedMemoryBytes =
-        distance.size() * sizeof(double) +
-        parent.size() * sizeof(int) +
-        visited.size() * sizeof(unsigned char) +
-        result.peakFrontierSize * sizeof(QueueNode);
-
     return finish(result);
+}
+
+std::vector<double> VoxelGrid::DijkstraCosts(
+    const coord& start_pos,
+    const std::vector<coord>& targets
+) {
+    const DijkstraRun run = runDijkstra(
+        _voxel_grid,
+        _x_length,
+        _y_length,
+        _z_length,
+        _min_pos,
+        start_pos,
+        targets,
+        false
+    );
+
+    return run.targetCosts;
 }

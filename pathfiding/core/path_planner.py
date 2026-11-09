@@ -47,6 +47,10 @@ class PathResult:
     path:tuple[Coord, ...]
     min_y:int
     elapsed_seconds:float
+    radius:int = 0
+    voxel_count:int = 0
+    nodes_expanded:int = 0
+    peak_frontier_size:int = 0
 
 
 
@@ -81,7 +85,7 @@ def _create_pathfinder(ore:str = DEFAULT_ORE):
         (initial_pos, min_pos, max_pos),
     )
 
-    return grid, voxel_buffer, min_pos, max_pos
+    return grid, voxel_buffer, initial_pos, min_pos, max_pos
 
 
 def find_path(
@@ -90,6 +94,7 @@ def find_path(
     target:Coord | None = None,
     *,
     ore:str = DEFAULT_ORE,
+    benchmark:bool = False,
 ) -> PathResult:
     """Compute a path from ``start`` to ``target`` or the best ore cluster."""
     if algorithm not in {"astar", "dijkstra"}:
@@ -98,7 +103,19 @@ def find_path(
     start = _as_coord(start)
 
     m.echo(f"{m_extra.txt_clr('g')}Extracting {ore} voxel grid...")
-    grid, _, min_pos, max_pos = _create_pathfinder(ore=ore)
+    grid, _, initial_pos, min_pos, max_pos = _create_pathfinder(ore=ore)
+
+    radius = max(
+        abs(initial_pos[0] - min_pos[0]),
+        abs(max_pos[0] - initial_pos[0]),
+        abs(initial_pos[2] - min_pos[2]),
+        abs(max_pos[2] - initial_pos[2]),
+    )
+    voxel_count = (
+        (max_pos[0] - min_pos[0] + 1)
+        * (max_pos[1] - min_pos[1] + 1)
+        * (max_pos[2] - min_pos[2] + 1)
+    )
 
     if not _in_bounds(start, min_pos, max_pos):
         raise PathfindingError(
@@ -134,10 +151,19 @@ def find_path(
     )
 
     started_at = time.perf_counter()
-    if algorithm == "astar":
-        raw_path = grid.AStart(start, end)
+    if benchmark:
+        if algorithm == "astar":
+            raw_path = grid.AStart(start, end, True)
+            stats = pathfinding.getLastAStarResult()
+        else:
+            raw_path = grid.Dijkstra(start, end, True)
+            stats = pathfinding.getLastDijkstraResult()
     else:
-        raw_path = grid.Dijkstra(start, end)
+        if algorithm == "astar":
+            raw_path = grid.AStart(start, end)
+        else:
+            raw_path = grid.Dijkstra(start, end)
+        stats = None
     elapsed = time.perf_counter() - started_at
 
     if not raw_path:
@@ -157,6 +183,10 @@ def find_path(
         path=path,
         min_y=min_pos[1],
         elapsed_seconds=elapsed,
+        radius=radius,
+        voxel_count=voxel_count,
+        nodes_expanded=int(stats.get("nodesExpanded", 0)) if stats else 0,
+        peak_frontier_size=int(stats.get("peakFrontierSize", 0)) if stats else 0,
     )
 
 

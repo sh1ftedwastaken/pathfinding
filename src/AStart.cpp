@@ -1,5 +1,8 @@
 #include <iostream>
 #include <cmath>
+#include <chrono>
+#include <cstddef>
+#include <utility>
 #include <vector>
 #include <array>
 #include <queue>
@@ -13,15 +16,27 @@
 
 using coord = std::array<int, 3>;
 
+thread_local PathResult g_lastAStarResult;
+
 bool is_blocked(int v) {
     return v == BLOCK_BEDROCK || v == BLOCK_WATER || v == BLOCK_UNBREAKABLE || v == BLOCK_LAVA;
 }
 
+const PathResult& getLastAStarResult() {
+    return g_lastAStarResult;
+}
+
 std::vector<coord> VoxelGrid::AStart(
     const coord& start_pos, 
-    const coord& end_pos
+    const coord& end_pos,
+    const bool track_metrics
 )
 {
+    const auto search_started = std::chrono::high_resolution_clock::now();
+    std::size_t nodes_expanded = 0;
+    std::size_t peak_frontier_size = 0;
+
+    g_lastAStarResult = PathResult{};
    /*
     Grid values:
         1    solid
@@ -64,14 +79,25 @@ std::vector<coord> VoxelGrid::AStart(
     
     while (!open_list.empty())
     {   
+        if (track_metrics && open_list.size() > peak_frontier_size)
+            peak_frontier_size = open_list.size();
+
         // Get node with lower F cost
         Node* curr_node = open_list.top();
         open_list.pop();
         coord curr_pos = curr_node->position;
-        
+
+        if (closed_set.count(curr_pos) == 1)
+            continue;
+
+        closed_set.insert(curr_pos);
+        if (track_metrics)
+            ++nodes_expanded;
+
         // Base Case: Reach Goal + Backtrack path
         if (curr_pos == end_pos)
         {
+            const double path_cost = curr_node->g;
             std::vector<coord> path;
 
             while (curr_node != nullptr)
@@ -81,13 +107,21 @@ std::vector<coord> VoxelGrid::AStart(
             }
 
             std::reverse(path.begin(), path.end());
+
+            if (track_metrics) {
+                PathResult result;
+                result.found = true;
+                result.nodesExpanded = nodes_expanded;
+                result.peakFrontierSize = peak_frontier_size;
+                result.pathCost = path_cost;
+                result.runtimeMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::high_resolution_clock::now() - search_started
+                ).count();
+                g_lastAStarResult = std::move(result);
+            }
+
             return path;
-        } 
-
-        if (closed_set.count(curr_pos) == 1)
-            continue;
-
-        closed_set.insert(curr_pos);
+        }
 
         std::vector<coord> movements = {
             // orthogonal moves (dy = 0)
@@ -237,6 +271,18 @@ std::vector<coord> VoxelGrid::AStart(
             open_list.push(neighbor_node);
         }
     }
+
     // There is not safe path connecting start to end
+    if (track_metrics) {
+        PathResult result;
+        result.found = false;
+        result.nodesExpanded = nodes_expanded;
+        result.peakFrontierSize = peak_frontier_size;
+        result.runtimeMs = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - search_started
+        ).count();
+        g_lastAStarResult = std::move(result);
+    }
+
     return {};
 }

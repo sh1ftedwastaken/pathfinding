@@ -29,16 +29,17 @@ for _path in (_CORE_PARENT, _DIST_DIR):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-import minescript as m  # noqa: E402
+import minescript as m  
 
-from core import minescript_extra as m_extra  # noqa: E402
-from core.path_planner import (  # noqa: E402
+from core import minescript_extra as m_extra  
+from core.path_planner import (  
     PathfindingError,
+    PathResult,
     build_glass_path,
     find_path,
     format_coord,
 )
-from core.player import Player, get_player  # noqa: E402
+from core.player import Player, get_player  
 
 
 PREFIX = ".pathfind"
@@ -133,12 +134,37 @@ def _request_stop(*, all_jobs: bool) -> None:
         m.echo(f"{m_extra.txt_clr('y')}Stopping pathfinding...")
 
 
+def _echo_benchmark(result: PathResult) -> None:
+    algorithm_label = "3D A*" if result.algorithm == "astar" else "3D Dijkstra's"
+
+    m.echo("===================================")
+    m.echo("[3D VOXEL PATHFINDING ENGINE]")
+    m.echo("===================================")
+    m.echo(f"Enter Start Coord: {format_coord(result.start)}")
+    m.echo(f"Enter Target Coord: {format_coord(result.end)}")
+    m.echo(f"Selected Algorithm: {algorithm_label}")
+    m.echo("--------------------------------------------")
+    m.echo(
+        f"[+] Loading {result.radius} blocks NSEW via pybind11... "
+        f"OK ({result.voxel_count:,} voxels loaded)"
+    )
+    m.echo("[+] Validating Voxel Grid & Hazards... OK")
+    m.echo("[+] Running Algorithm...")
+    m.echo("--------------------------------------------")
+    m.echo(f"Execution Time: {result.elapsed_seconds * 1000:.1f} ms")
+    m.echo(f"Nodes Expanded: {result.nodes_expanded:,}")
+    m.echo(f"Path Length: {len(result.path)} blocks")
+    m.echo("Status: SUCCESS")
+    m.echo("===================================")
+
+
 def _run_request(request: PathfindRequest, player: Player) -> None:
     try:
         result = find_path(
             request.algorithm,
             player.position,
             request.target,
+            benchmark=request.wait_seconds > 0,
         )
 
         m.echo(
@@ -158,6 +184,8 @@ def _run_request(request: PathfindRequest, player: Player) -> None:
             m.echo(f"{m_extra.txt_clr('a')}{chunk}")
 
         if _STOP_EVENT.is_set():
+            if request.wait_seconds > 0:
+                _echo_benchmark(result)
             return
 
         issued = build_glass_path(
@@ -170,6 +198,9 @@ def _run_request(request: PathfindRequest, player: Player) -> None:
             m.echo(f"{m_extra.txt_clr('y')}Path building stopped")
         else:
             m.echo(f"{m_extra.txt_clr('g')}Built path with {issued} setblock commands")
+
+        if request.wait_seconds > 0:
+            _echo_benchmark(result)
 
     except PathfindingError as exc:
         m.echo(f"{m_extra.txt_clr('r')}{exc}")

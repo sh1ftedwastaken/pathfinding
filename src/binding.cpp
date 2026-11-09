@@ -2,8 +2,26 @@
 #include <pybind11/stl.h>
 
 #include "VoxelGrid.hpp"
+#include "AStart.hpp"
+#include "Dijkstra.hpp"
 
 namespace py = pybind11;
+
+namespace {
+
+py::dict benchmark_stats(const PathResult& result)
+{
+    py::dict stats;
+    stats["runtimeMs"] = result.runtimeMs;
+    stats["nodesExpanded"] = result.nodesExpanded;
+    stats["peakFrontierSize"] = result.peakFrontierSize;
+    stats["pathCost"] = result.pathCost;
+    stats["estimatedMemoryBytes"] = result.estimatedMemoryBytes;
+    stats["found"] = result.found;
+    return stats;
+}
+
+}
 
 PYBIND11_MODULE(pathfinding, m)
 {
@@ -27,7 +45,16 @@ PYBIND11_MODULE(pathfinding, m)
           .def("DijkstraCosts", &VoxelGrid::DijkstraCosts,
                py::arg("start_pos"), py::arg("targets"))
           .def("AStart", &VoxelGrid::AStart,
-               py::arg("start_pos"), py::arg("end_pos"))
+               py::arg("start_pos"), py::arg("end_pos"),
+               py::arg("track_metrics") = false)
           .def("Dijkstra", &VoxelGrid::Dijkstra,
-               py::arg("start_pos"), py::arg("end_pos"));
+               py::arg("start_pos"), py::arg("end_pos"),
+               py::arg("track_metrics") = false);
+
+    m.def("getLastAStarResult", []() {
+        return benchmark_stats(::getLastAStarResult());
+    });
+    m.def("getLastDijkstraResult", []() {
+        return benchmark_stats(::getLastDijkstraResult());
+    });
 }

@@ -67,7 +67,8 @@ DijkstraRun runDijkstra(
     const coord& minPos,
     const coord& startPos,
     const std::vector<coord>& targets,
-    const bool needParents
+    const bool needParents,
+    const bool trackMetrics
 ) {
     DijkstraRun run;
     const double INF = std::numeric_limits<double>::infinity();
@@ -134,7 +135,7 @@ DijkstraRun runDijkstra(
     const MovementRules rules{};
 
     while (!frontier.empty()) {
-        if (frontier.size() > run.peakFrontierSize) {
+        if (trackMetrics && frontier.size() > run.peakFrontierSize) {
             run.peakFrontierSize = frontier.size();
         }
 
@@ -151,7 +152,9 @@ DijkstraRun runDijkstra(
         }
 
         run.visited[currentIndex] = 1;
-        run.nodesExpanded++;
+        if (trackMetrics) {
+            run.nodesExpanded++;
+        }
 
         const auto targetIt = targetSlots.find(currentIndex);
         if (targetIt != targetSlots.end()) {
@@ -322,11 +325,13 @@ DijkstraRun runDijkstra(
         }
     }
 
-    run.estimatedMemoryBytes =
-        run.distance.size() * sizeof(double) +
-        (needParents ? run.parent.size() * sizeof(int) : 0) +
-        run.visited.size() * sizeof(unsigned char) +
-        run.peakFrontierSize * sizeof(QueueNode);
+    if (trackMetrics) {
+        run.estimatedMemoryBytes =
+            run.distance.size() * sizeof(double) +
+            (needParents ? run.parent.size() * sizeof(int) : 0) +
+            run.visited.size() * sizeof(unsigned char) +
+            run.peakFrontierSize * sizeof(QueueNode);
+    }
 
     return run;
 }
@@ -339,9 +344,11 @@ const PathResult& getLastDijkstraResult() {
 
 std::vector<coord> VoxelGrid::Dijkstra(
     const coord& start_pos,
-    const coord& end_pos
+    const coord& end_pos,
+    const bool track_metrics
 ) {
     PathResult result;
+    g_lastDijkstraResult = PathResult{};
     const auto begin = std::chrono::high_resolution_clock::now();
 
     auto finish = [&](PathResult& completed) -> std::vector<coord> {
@@ -349,7 +356,9 @@ std::vector<coord> VoxelGrid::Dijkstra(
         completed.runtimeMs =
             std::chrono::duration<double, std::milli>(end - begin).count();
 
-        g_lastDijkstraResult = completed;
+        if (track_metrics) {
+            g_lastDijkstraResult = completed;
+        }
         return completed.path;
     };
 
@@ -361,7 +370,8 @@ std::vector<coord> VoxelGrid::Dijkstra(
         _min_pos,
         start_pos,
         {end_pos},
-        true
+        true,
+        track_metrics
     );
 
     result.nodesExpanded = run.nodesExpanded;
@@ -422,6 +432,7 @@ std::vector<double> VoxelGrid::DijkstraCosts(
         _min_pos,
         start_pos,
         targets,
+        false,
         false
     );
 

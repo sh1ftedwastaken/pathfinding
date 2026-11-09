@@ -60,10 +60,12 @@ public:
 
     // Pathfinding form start to end
     std::vector<coord> AStart(
-        const coord& start_pos, const coord& end_pos
+        const coord& start_pos, const coord& end_pos,
+        bool track_metrics = false
     );
     std::vector<coord> Dijkstra(
-        const coord& start_pos, const coord& end_pos
+        const coord& start_pos, const coord& end_pos,
+        bool track_metrics = false
     );
 };
 
